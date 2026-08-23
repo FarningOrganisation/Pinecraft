@@ -12,6 +12,8 @@ CHARCOAL = ITEM_ID_START + 1
 IRON_INGOT = ITEM_ID_START + 2
 GOLD_INGOT = ITEM_ID_START + 3
 DIAMOND = ITEM_ID_START + 4
+STICK = ITEM_ID_START + 5
+TORCH = ITEM_ID_START + 6
 
 ITEMS = {
     PICKAXE: {
@@ -50,11 +52,33 @@ ITEMS = {
         "item_type": "material",
         "max_stack": 64,
     },
+    STICK: {
+        "item_id": STICK,
+        "name": "Stick",
+        "texture": "stick.png",
+        "item_type": "material",
+        "max_stack": 64,
+    },
+    TORCH: {
+        "item_id": TORCH,
+        "name": "Torch",
+        "texture": "torch_on.png",
+        "item_type": "light",
+        "max_stack": 64,
+        "texture_dir": "blocks",
+    },
 }
 
-TEXTURE_DIR = Path(__file__).resolve().parent / "assets" / "textures" / "items"
+TEXTURE_ROOT = Path(__file__).resolve().parent / "assets" / "textures"
+
+
+def _item_texture_path(item_definition: dict) -> Path:
+    texture_dir = item_definition.get("texture_dir", "items")
+    return TEXTURE_ROOT / texture_dir / item_definition["texture"]
+
+
 ITEM_TEXTURES = {
-    item_id: arcade.load_texture(TEXTURE_DIR / item["texture"])
+    item_id: arcade.load_texture(_item_texture_path(item))
     for item_id, item in ITEMS.items()
 }
 

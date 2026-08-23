@@ -103,7 +103,7 @@ class InventoryUI:
 
     def _crafting_result_value(self):
         """Gibt das aktuelle Crafting-Ergebnis oder None zurück."""
-        result_item, _ = self._crafting_result_info()
+        result_item, _, _, _ = self._crafting_result_info()
         return result_item
 
     def _current_crafting_grid(self):
@@ -122,12 +122,21 @@ class InventoryUI:
         """Sucht ein passendes Rezept für den aktuellen 3x3-Grid."""
         grid = self._current_crafting_grid()
         for result_item, variants in CRAFTING_RECIPES.items():
-            for pattern in variants:
+            for recipe in variants:
+                if isinstance(recipe, dict):
+                    pattern = recipe.get("pattern")
+                    output_count = int(recipe.get("count", 1))
+                else:
+                    pattern = recipe
+                    output_count = 1
+
+                if pattern is None:
+                    continue
                 if len(pattern) != 3 or any(len(recipe_row) != 3 for recipe_row in pattern):
                     continue
                 if all(grid[row][col] == pattern[row][col] for row in range(3) for col in range(3)):
-                    return result_item, pattern
-        return None, None
+                    return result_item, pattern, max(1, output_count)
+        return None, None, 0
 
     def _crafts_possible_for_pattern(self, pattern):
         """Berechnet, wie oft ein passendes Rezept crafted werden kann."""
@@ -154,16 +163,16 @@ class InventoryUI:
         return 0 if crafts_possible is None else crafts_possible
 
     def _crafting_result_info(self):
-        """Gibt (Ergebnisitem, Anzahl craftbarer Ergebnisse) zurück."""
-        result_item, pattern = self._find_matching_recipe()
-        if result_item is None or pattern is None:
-            return None, 0
+        """Gibt (Ergebnisitem, Ausgabemenge pro Craft, crafts_possible, pattern) zurück."""
+        result_item, pattern, output_count = self._find_matching_recipe()
+        if result_item is None or pattern is None or output_count <= 0:
+            return None, 0, 0, None
 
         crafts_possible = self._crafts_possible_for_pattern(pattern)
         if crafts_possible <= 0:
-            return None, 0
+            return None, 0, 0, None
 
-        return result_item, crafts_possible
+        return result_item, output_count, crafts_possible, pattern
 
     def _consume_crafting_materials(self, crafts_count: int, pattern):
         """Verbraucht Materialien direkt aus den Crafting-Slots."""
@@ -245,18 +254,15 @@ class InventoryUI:
 
         result_rect = self._result_slot_rect()
         if result_rect.left <= x <= result_rect.right and result_rect.bottom <= y <= result_rect.top:
-            result_item, crafts_possible = self._crafting_result_info()
-            if result_item is None or crafts_possible <= 0:
+            result_item, output_count, crafts_possible, pattern = self._crafting_result_info()
+            if result_item is None or output_count <= 0 or crafts_possible <= 0 or pattern is None:
                 return False
             if button == arcade.MOUSE_BUTTON_LEFT:
-                remaining = inventory.add_item_to_empty_slots(result_item, crafts_possible)
-                crafted = crafts_possible - remaining
-                if crafted <= 0:
+                # Pro Klick genau ein Craft ausführen; Ausgabe kann >1 sein (z.B. Planks, Sticks).
+                remaining = inventory.add_item_to_empty_slots(result_item, output_count)
+                if remaining > 0:
                     return False
-                _, pattern = self._find_matching_recipe()
-                if pattern is None:
-                    return False
-                self._consume_crafting_materials(crafted, pattern)
+                self._consume_crafting_materials(1, pattern)
                 return True
             return False
 
@@ -380,7 +386,7 @@ class InventoryUI:
         arcade.draw_text("→", arrow_x, arrow_top, arcade.color.WHITE, 36, anchor_x="center", anchor_y="center")
 
         result_rect = self._result_slot_rect()
-        result_item, crafts_possible = self._crafting_result_info()
+        result_item, output_count, crafts_possible, _ = self._crafting_result_info()
         result_fill = (40, 40, 45, 200)
         result_border = arcade.color.WHITE if crafts_possible > 0 else (180, 180, 180, 180)
         arcade.draw_rect_filled(result_rect, result_fill)
@@ -390,9 +396,9 @@ class InventoryUI:
             if texture is not None:
                 item_rect = arcade.rect.XYWH(result_rect.center_x, result_rect.center_y + 3, 28, 28)
                 arcade.draw_texture_rect(texture, item_rect, alpha=255)
-            if crafts_possible > 1:
+            if output_count > 1:
                 arcade.draw_text(
-                    str(crafts_possible),
+                    str(output_count),
                     result_rect.right - 8,
                     result_rect.bottom + 8,
                     arcade.color.WHITE,

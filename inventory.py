@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from blocks import AIR, BLOCK_TEXTURES, BLOCKS
-from items import ITEM_ID_START, ITEMS, ITEM_TEXTURES, is_item_id
+from items import ITEM_ID_START, ITEMS, ITEM_TEXTURES, TORCH, is_item_id
 
 
 @dataclass
@@ -62,9 +62,20 @@ class Inventory:
         return isinstance(entry_id, int) and entry_id in BLOCKS
 
     @staticmethod
+    def get_place_target(entry_id):
+        """Liefert Platzierungsziel als ('block'|'item', id) oder None."""
+        if entry_id is None or entry_id == AIR:
+            return None
+        if Inventory.is_block_id(entry_id):
+            return "block", entry_id
+        if entry_id == TORCH:
+            return "item", entry_id
+        return None
+
+    @staticmethod
     def is_placeable(entry_id):
         """Nur Blöcke sind platzierbar."""
-        return Inventory.is_block_id(entry_id)
+        return Inventory.get_place_target(entry_id) is not None
 
     @staticmethod
     def get_display_name(entry_id):

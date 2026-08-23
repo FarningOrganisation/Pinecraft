@@ -54,9 +54,11 @@ class World:
     def __init__(self, seed: int = 1337, load_radius: int = 3, unload_radius: int = 5, generator=None):
         self.seed = seed
         self.chunks: dict[int, Chunk] = {}
+        self.placed_items: dict[tuple[int, int], int] = {}
         self.saved_chunk_blocks: dict[int, list[list[int]]] = {}
         self.pending_generated_blocks: dict[int, dict[tuple[int, int], int]] = {}
         self.changed_blocks: list[tuple[int, int, int, int]] = []
+        self.changed_placed_items: list[tuple[int, int, int | None, int | None]] = []
         self.load_radius = load_radius
         self.unload_radius = unload_radius
 
@@ -191,8 +193,47 @@ class World:
         """Platziert einen Block, wenn die Position frei ist."""
         if self.get_block(world_x, y) != AIR:
             return False
+        if (world_x, y) in self.placed_items:
+            return False
         self.set_block(world_x, y, block_id)
         return True
+
+    def get_placed_item(self, world_x: int, y: int) -> int | None:
+        """Liefert ein platziertes Item an einer Tile-Position oder None."""
+        return self.placed_items.get((world_x, y))
+
+    def place_item(self, world_x: int, y: int, item_id: int) -> bool:
+        """Platziert ein Item in einer freien Blockzelle."""
+        if y < 0 or y >= WORLD_HEIGHT:
+            return False
+        if self.get_block(world_x, y) != AIR:
+            return False
+
+        key = (world_x, y)
+        old_item = self.placed_items.get(key)
+        if old_item is not None:
+            return False
+
+        self.placed_items[key] = item_id
+        self.changed_placed_items.append((world_x, y, None, item_id))
+        return True
+
+    def remove_placed_item(self, world_x: int, y: int) -> int | None:
+        """Entfernt ein platziertes Item und liefert dessen ID."""
+        key = (world_x, y)
+        old_item = self.placed_items.pop(key, None)
+        if old_item is None:
+            return None
+        self.changed_placed_items.append((world_x, y, old_item, None))
+        return old_item
+
+    def consume_changed_placed_items(self) -> list[tuple[int, int, int | None, int | None]]:
+        """Liefert und leert die Liste geänderter platzierter Items."""
+        if not self.changed_placed_items:
+            return []
+        changes = self.changed_placed_items
+        self.changed_placed_items = []
+        return changes
 
     def get_blocks_around(self, left: float, right: float, bottom: float, top: float):
         """Liefert nur die festen Blöcke, die in der Nähe des AABBs liegen."""

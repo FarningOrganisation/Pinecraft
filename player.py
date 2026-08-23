@@ -10,8 +10,8 @@ from pathlib import Path
 import arcade
 
 from animated_sprite import AnimatedSprite
-from blocks import AIR, DIRT, GRASS, STONE, get_block_drop_id, get_block_hardness, is_block_breakable
-from items import PICKAXE
+from blocks import AIR, DIRT, GRASS, STONE, get_block_drop_id, get_block_hardness, is_block_breakable, is_block_solid
+from items import PICKAXE, TORCH
 from inventory import Inventory
 from settings import (
     GROUND_Y,
@@ -76,7 +76,7 @@ class Player(AnimatedSprite):
         hotbar_start = self.inventory.HOTBAR_START
         self.inventory.slots[hotbar_start + 0].item = PICKAXE
         self.inventory.slots[hotbar_start + 0].count = 1
-        self.inventory.slots[hotbar_start + 1].item = DIRT
+        self.inventory.slots[hotbar_start + 1].item = TORCH
         self.inventory.slots[hotbar_start + 1].count = 12
         self.inventory.slots[hotbar_start + 2].item = STONE
         self.inventory.slots[hotbar_start + 2].count = 12
@@ -127,6 +127,11 @@ class Player(AnimatedSprite):
                 "anchor_x": 0,
                 "anchor_y": 1,
             },
+            "light": {
+                "scale": 2.0,
+                "anchor_x": 0.5,
+                "anchor_y": 1.0,
+            },
         }
         self._held_texture_flip_cache = {}
         self.mining_target = None
@@ -172,11 +177,21 @@ class Player(AnimatedSprite):
 
     @property
     def selected_block(self):
-        """Gibt den aktuell ausgewählten Hotbar-Block zurück."""
+        """Abwärtskompatibel: liefert nur die platzierbare Block-ID oder None."""
         selected_entry = self.inventory.get_hotbar_item(self.selected_hotbar_slot)
-        if self.inventory.is_placeable(selected_entry):
-            return selected_entry
+        place_target = self.inventory.get_place_target(selected_entry)
+        if place_target is None:
+            return None
+        target_kind, target_id = place_target
+        if target_kind == "block":
+            return target_id
         return None
+
+    @property
+    def selected_place_target(self):
+        """Liefert das aktuelle Platzierungsziel als ('block'|'item', id)."""
+        selected_entry = self.inventory.get_hotbar_item(self.selected_hotbar_slot)
+        return self.inventory.get_place_target(selected_entry)
 
     def select_hotbar_slot(self, slot_index: int):
         """Wählt ein Hotbar-Feld aus."""
@@ -338,14 +353,107 @@ class Player(AnimatedSprite):
         )
         arcade.draw_texture_rect(texture, rect, alpha=255, angle=item_rotation)
 
+    def get_equipped_light_source_position(self) -> tuple[float, float] | None:
+        """Liefert die Weltposition der Flammenspitze des gehaltenen Light-Items."""
+        held_entry = self._selected_held_entry()
+        if held_entry is None:
+            return None
+        if self.inventory.get_item_type(held_entry) != "light":
+            return None
+
+        frame_texture = self.texture
+        if frame_texture is None:
+            return None
+
+        frame_width = frame_texture.width
+        frame_height = frame_texture.height
+        if frame_width <= 0 or frame_height <= 0:
+            return None
+
+        image_x, image_y, item_rotation, item_scale, _z_offset, anchor_x, anchor_y = self._held_item_image_pose()
+        type_modifier = self.held_item_type_modifiers.get("light", {})
+
+        modifier_x = type_modifier.get("x", 0)
+        modifier_y = type_modifier.get("y", 0)
+        modifier_rotation = type_modifier.get("rotation", 0)
+        modifier_scale = type_modifier.get("scale", 1.0)
+        modifier_anchor_x = type_modifier.get("anchor_x")
+        modifier_anchor_y = type_modifier.get("anchor_y")
+
+        image_y += modifier_y
+        item_rotation += modifier_rotation
+        item_scale *= modifier_scale
+
+        if modifier_anchor_x is not None:
+            anchor_x = modifier_anchor_x
+        elif anchor_x is None:
+            anchor_x = 0.5
+
+        if modifier_anchor_y is not None:
+            anchor_y = modifier_anchor_y
+        elif anchor_y is None:
+            anchor_y = 0.5
+
+        if self.facing_right:
+            image_x = image_x + modifier_x
+        else:
+            image_x = (frame_width - image_x) - modifier_x
+            item_rotation = -item_rotation
+            anchor_x = 1.0 - anchor_x
+
+        sprite_width = abs(self.width)
+        sprite_height = abs(self.height)
+        world_left = self.center_x - sprite_width / 2
+        world_top = self.center_y + sprite_height / 2
+
+        scale_x = sprite_width / frame_width
+        scale_y = sprite_height / frame_height
+
+        held_x = world_left + image_x * scale_x
+        held_y = world_top - image_y * scale_y
+        item_size = max(1.0, self.held_item_size * item_scale)
+
+        local_anchor_x = (anchor_x - 0.5) * item_size
+        local_anchor_y = (0.5 - anchor_y) * item_size
+        rot_anchor_x, rot_anchor_y = arcade.math.rotate_point(
+            local_anchor_x,
+            local_anchor_y,
+            0,
+            0,
+            item_rotation,
+        )
+        center_x = held_x - rot_anchor_x
+        center_y = held_y - rot_anchor_y
+
+        flame_local_x = (0.5 - 0.5) * item_size
+        flame_local_y = (0.5 - 0.0) * item_size
+        flame_rot_x, flame_rot_y = arcade.math.rotate_point(
+            flame_local_x,
+            flame_local_y,
+            0,
+            0,
+            item_rotation,
+        )
+        return center_x + flame_rot_x, center_y + flame_rot_y
+
     def can_place_block(self, world, tile_x: int, tile_y: int) -> bool:
         """Prüft, ob an der angegebenen Position ein Block platziert werden kann."""
         if world is None or world.get_block(tile_x, tile_y) != AIR:
             return False
-
-        selected_block = self.selected_block
-        if selected_block is None or self.inventory.get_item_count(selected_block) <= 0:
+        if world.get_placed_item(tile_x, tile_y) is not None:
             return False
+
+        place_target = self.selected_place_target
+        selected_entry = self.inventory.get_hotbar_item(self.selected_hotbar_slot)
+        if place_target is None or selected_entry is None or self.inventory.get_item_count(selected_entry) <= 0:
+            return False
+
+        target_kind, target_id = place_target
+
+        if target_kind == "item" and target_id == TORCH:
+            support_id = world.get_block(tile_x, tile_y - 1)
+            if support_id == AIR or not is_block_solid(support_id):
+                return False
 
         block_center_x, block_center_y = world.to_world_position(tile_x, tile_y)
         block_left = block_center_x - TILE_SIZE / 2
@@ -372,18 +480,24 @@ class Player(AnimatedSprite):
         if not self.can_place_block(world, tile_x, tile_y):
             return False
 
-        selected_block = self.selected_block
-        if selected_block is None:
+        selected_entry = self.inventory.get_hotbar_item(self.selected_hotbar_slot)
+        place_target = self.selected_place_target
+        if place_target is None or selected_entry is None:
             return False
 
-        if self.inventory.get_item_count(selected_block) <= 0:
+        target_kind, target_id = place_target
+
+        if self.inventory.get_item_count(selected_entry) <= 0:
             return False
 
-        placed = world.place_block(tile_x, tile_y, selected_block)
+        if target_kind == "block":
+            placed = world.place_block(tile_x, tile_y, target_id)
+        else:
+            placed = world.place_item(tile_x, tile_y, target_id)
         if not placed:
             return False
 
-        self.inventory.remove_item(selected_block, 1)
+        self.inventory.remove_item(selected_entry, 1)
         chunk_x, _ = world_to_chunk_and_local(tile_x)
         self.dirty_chunk_xs.add(chunk_x)
         self.world_dirty = True
