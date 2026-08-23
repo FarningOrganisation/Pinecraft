@@ -17,6 +17,9 @@ class AABBPhysics:
 
     def __init__(self, world):
         self.world = world
+        # Kleine Toleranz verhindert sporadisches Hängenbleiben
+        # in exakt 2-Block-hohen Gängen durch Float-Ungenauigkeiten.
+        self.collision_skin = 0.35
 
     def _box_left(self, player):
         return player.center_x - player.collision_width / 2
@@ -51,21 +54,22 @@ class AABBPhysics:
         right = self._box_right(player)
         bottom = self._box_bottom(player)
         top = self._box_top(player)
+        skin = self.collision_skin
 
         for tile_x, tile_y, block_x_min, block_x_max, block_y_min, block_y_max in self.world.get_blocks_around(
             left, right, bottom, top
         ):
-            if not (bottom < block_y_max and top > block_y_min):
+            if not (bottom + skin < block_y_max and top - skin > block_y_min):
                 continue
 
             is_jump_impulse = player.change_y > 0.0
 
             if player.change_x > 0 and previous_right <= block_x_min:
-                player.center_x = block_x_min - player.collision_width / 2
+                player.center_x = block_x_min - player.collision_width / 2 - skin
                 if not is_jump_impulse:
                     player.change_x = 0.0
             elif player.change_x < 0 and previous_left >= block_x_max:
-                player.center_x = block_x_max + player.collision_width / 2
+                player.center_x = block_x_max + player.collision_width / 2 + skin
                 if not is_jump_impulse:
                     player.change_x = 0.0
 
@@ -75,18 +79,19 @@ class AABBPhysics:
         right = self._box_right(player)
         bottom = self._box_bottom(player)
         top = self._box_top(player)
+        skin = self.collision_skin
 
         for tile_x, tile_y, block_x_min, block_x_max, block_y_min, block_y_max in self.world.get_blocks_around(
             left, right, bottom, top
         ):
-            if not (left < block_x_max and right > block_x_min):
+            if not (left + skin < block_x_max and right - skin > block_x_min):
                 continue
 
             if player.change_y > 0 and previous_top <= block_y_min:
-                player.center_y = block_y_min - player.collision_height / 2
+                player.center_y = block_y_min - player.collision_height / 2 - skin
                 player.change_y = 0.0
             elif player.change_y < 0 and previous_bottom >= block_y_max:
-                player.center_y = block_y_max + player.collision_height / 2
+                player.center_y = block_y_max + player.collision_height / 2 + skin
                 player.change_y = 0.0
                 player.on_ground = True
 

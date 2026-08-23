@@ -452,6 +452,7 @@ class Player(AnimatedSprite):
 
     def start_mining(self, block_pos):
         """Startet einen Mining-Vorgang an einer gegebenen Blockposition."""
+        print("start mining")
         if self.is_mining:
             # Wenn die Animation im gleichen Frame bereits fertig ist,
             # Ergebnis zuerst abschließen statt den neuen Klick zu verlieren.

@@ -74,6 +74,7 @@ class GameWindow(arcade.Window):
         self.left_mouse_down = False
         self.mouse_screen_x = 0.0
         self.mouse_screen_y = 0.0
+        self.pending_mine_target: tuple[int, int] | None = None
         self.break_range = 3.5 * TILE_SIZE
         self.item_pull_radius = 4.5 * TILE_SIZE
         self.item_pickup_radius = 0.95 * TILE_SIZE
@@ -291,11 +292,12 @@ class GameWindow(arcade.Window):
         self.physics.update(self.player, physics_delta)
         self.player.update(physics_delta)
 
-        if self.left_mouse_down and not self.inventory_ui.visible and not self.player.is_mining:
-            target = self._get_block_from_mouse(self.mouse_screen_x, self.mouse_screen_y)
-            if target is not None:
-                tile_x, tile_y, _ = target
-                self.player.start_mining((tile_x, tile_y))
+        if self.pending_mine_target is not None and not self.inventory_ui.visible and not self.player.is_mining:
+            target_x, target_y = self.pending_mine_target
+            block_id = self.world.get_block(target_x, target_y)
+            if block_id != AIR:
+                self.player.start_mining((target_x, target_y))
+            self.pending_mine_target = None
 
         for drop_id, tile_x, tile_y in self.player.consume_pending_item_drops():
             self._spawn_dropped_item(drop_id, tile_x, tile_y)
@@ -429,10 +431,15 @@ class GameWindow(arcade.Window):
             self.left_mouse_down = True
             target = self._get_block_from_mouse(x, y)
             if target is None:
+                self.pending_mine_target = None
                 return
 
             tile_x, tile_y, _ = target
+            self.pending_mine_target = (tile_x, tile_y)
             self.player.start_mining((tile_x, tile_y))
+
+            if self.player.is_mining:
+                self.pending_mine_target = None
             return
 
         if button == arcade.MOUSE_BUTTON_RIGHT:
@@ -441,11 +448,12 @@ class GameWindow(arcade.Window):
             self.player.place_selected_block(self.world, tile_x, tile_y)
 
     def on_mouse_release(self, x: float, y: float, button: int, modifiers: int):
-        """Bricht den Mining-Vorgang ab, wenn die Taste vorzeitig losgelassen wird."""
+        """Aktualisiert den Maustastenstatus und bricht Mining auf Wunsch ab."""
         self.mouse_screen_x = x
         self.mouse_screen_y = y
         if button == arcade.MOUSE_BUTTON_LEFT:
             self.left_mouse_down = False
+            self.pending_mine_target = None
             self.player.cancel_mining()
 
     def on_mouse_motion(self, x: float, y: float, dx: float, dy: float):
