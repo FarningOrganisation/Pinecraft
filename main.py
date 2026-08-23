@@ -11,6 +11,7 @@ from pathlib import Path
 import arcade
 
 from blocks import AIR, BLOCK_TEXTURES
+from dropped_item import DroppedItem
 from hotbar import Hotbar
 from inventory_ui import InventoryUI
 from physics import AABBPhysics
@@ -18,6 +19,7 @@ from player import Player
 from settings import (
     BACKGROUND_COLOR,
     CHUNK_WIDTH,
+    GRAVITY,
     PLAYER_SPEED,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
@@ -40,6 +42,8 @@ class GameWindow(arcade.Window):
         self.player_sprite_list.append(self.player)
         self.mining_sprite_list = arcade.SpriteList()
         self.mining_sprite_list.append(self.player.mining_animation)
+        self.dropped_item_sprite_list = arcade.SpriteList()
+        self.dropped_items: list[DroppedItem] = []
         self.hotbar = Hotbar(self.player)
         self.inventory_ui = InventoryUI(self.player, SCREEN_WIDTH, SCREEN_HEIGHT)
         self.chunk_sprite_lists: dict[int, arcade.SpriteList] = {}
@@ -68,6 +72,48 @@ class GameWindow(arcade.Window):
         self.left_pressed = False
         self.right_pressed = False
         self.break_range = 3.5 * TILE_SIZE
+        self.item_pull_radius = 4.5 * TILE_SIZE
+        self.item_pickup_radius = 0.95 * TILE_SIZE
+
+    def _spawn_dropped_item(self, entry_id: int, tile_x: int, tile_y: int):
+        """Erzeugt ein physisches Item an der Blockposition."""
+        texture = self.player.inventory.get_texture(entry_id)
+        if texture is None:
+            return
+
+        spawn_x, spawn_y = self.world.to_world_position(tile_x, tile_y)
+        drop = DroppedItem(entry_id=entry_id, texture=texture, spawn_x=spawn_x, spawn_y=spawn_y)
+        self.dropped_items.append(drop)
+        self.dropped_item_sprite_list.append(drop.sprite)
+
+    def _update_dropped_items(self, delta_time: float):
+        """Aktualisiert Drop-Physik und sammelt erreichbare Items auf."""
+        if not self.dropped_items:
+            return
+
+        preferred_slot = self.player.inventory.HOTBAR_START + self.player.selected_hotbar_slot
+        physics_delta = min(delta_time, 1 / 30)
+
+        remaining: list[DroppedItem] = []
+        for drop in self.dropped_items:
+            wants_pickup = drop.update(
+                world=self.world,
+                player=self.player,
+                delta_time=physics_delta,
+                gravity=GRAVITY,
+                pull_radius=self.item_pull_radius,
+                pickup_radius=self.item_pickup_radius,
+            )
+
+            if wants_pickup:
+                left = self.player.inventory.add_item(drop.entry_id, 1, preferred_slot_index=preferred_slot)
+                if left <= 0:
+                    self.dropped_item_sprite_list.remove(drop.sprite)
+                    continue
+
+            remaining.append(drop)
+
+        self.dropped_items = remaining
 
     def _clamped_camera_position(self):
         """Klemmt die Kamera, damit man nicht unter die Welt schauen kann."""
@@ -171,6 +217,9 @@ class GameWindow(arcade.Window):
             if not should_render:
                 continue
 
+            if texture is None:
+                continue
+
             if existing_sprite is not None:
                 existing_sprite.texture = texture
                 continue
@@ -205,6 +254,8 @@ class GameWindow(arcade.Window):
         self.player_sprite_list.append(self.player)
         self.mining_sprite_list = arcade.SpriteList()
         self.mining_sprite_list.append(self.player.mining_animation)
+        self.dropped_item_sprite_list = arcade.SpriteList()
+        self.dropped_items = []
         self.hotbar = Hotbar(self.player)
         self.inventory_ui = InventoryUI(self.player, SCREEN_WIDTH, SCREEN_HEIGHT)
         self.physics = AABBPhysics(self.world)
@@ -236,6 +287,9 @@ class GameWindow(arcade.Window):
         physics_delta = min(delta_time, 1 / 30)
         self.physics.update(self.player, physics_delta)
         self.player.update(physics_delta)
+        for drop_id, tile_x, tile_y in self.player.consume_pending_item_drops():
+            self._spawn_dropped_item(drop_id, tile_x, tile_y)
+        self._update_dropped_items(physics_delta)
 
         if self.player.mining_target is not None:
             tile_x, tile_y = self.player.mining_target
@@ -307,6 +361,7 @@ class GameWindow(arcade.Window):
             chunk_sprites = self.chunk_sprite_lists.get(chunk_x)
             if chunk_sprites is not None:
                 chunk_sprites.draw()
+        self.dropped_item_sprite_list.draw()
         self.player.draw_held_item(layer="back")
         self.player_sprite_list.draw()
         self.player.draw_held_item(layer="front")

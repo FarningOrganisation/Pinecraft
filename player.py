@@ -132,6 +132,7 @@ class Player(AnimatedSprite):
         self.mining_target = None
         self.is_mining = False
         self.mining_finished = False
+        self.pending_item_drops: list[tuple[int, int, int]] = []
         self.world_dirty = False
         self.dirty_chunk_xs: set[int] = set()
         self.mining_animation = SpriteAnimation(
@@ -264,7 +265,7 @@ class Player(AnimatedSprite):
 
         image_x, image_y, item_rotation, item_scale, z_offset, anchor_x, anchor_y = self._held_item_image_pose()
         item_type = self.inventory.get_item_type(held_entry)
-        type_modifier = self.held_item_type_modifiers.get(item_type, {})
+        type_modifier = self.held_item_type_modifiers.get(item_type or "", {})
 
         modifier_x = type_modifier.get("x", 0)
         modifier_y = type_modifier.get("y", 0)
@@ -512,12 +513,19 @@ class Player(AnimatedSprite):
             drop_id = block_id
         chunk_x, _ = world_to_chunk_and_local(tile_x)
         self.dirty_chunk_xs.add(chunk_x)
-        preferred_slot = self.inventory.HOTBAR_START + self.selected_hotbar_slot
-        self.inventory.add_item(drop_id, 1, preferred_slot_index=preferred_slot)
+        self.pending_item_drops.append((drop_id, tile_x, tile_y))
         self.mining_target = None
         self.mining_finished = False
         self.is_mining = False
         self.mining_animation.reset()
         self.world_dirty = True
         return block_id
+
+    def consume_pending_item_drops(self) -> list[tuple[int, int, int]]:
+        """Liefert und leert alle wartenden Drop-Spawn-Events."""
+        if not self.pending_item_drops:
+            return []
+        pending = self.pending_item_drops
+        self.pending_item_drops = []
+        return pending
 

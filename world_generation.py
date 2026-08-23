@@ -10,7 +10,20 @@ import math
 
 import arcade
 
-from blocks import AIR, BEDROCK, BLOCK_TEXTURES, DIRT, GRASS, LEAVES, OAK, STONE
+from blocks import (
+    AIR,
+    BEDROCK,
+    BLOCK_TEXTURES,
+    COAL_ORE,
+    DIAMOND_ORE,
+    DIRT,
+    GOLD_ORE,
+    GRASS,
+    IRON_ORE,
+    LEAVES,
+    OAK,
+    STONE,
+)
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
 from world import World, world_to_chunk_and_local
 
@@ -34,6 +47,60 @@ class WorldGenerator:
         """Deterministischer Zufallswert im Bereich [0, 1)."""
         mixed = (world_x * 374761393 + self.seed * 668265263 + salt * 1442695040888963407) & 0xFFFFFFFF
         return self._hash_u32(mixed) / 4294967296.0
+
+    def _rand01_2d(self, world_x: int, world_y: int, salt: int) -> float:
+        """Deterministischer Zufallswert für 2D-Koordinaten im Bereich [0, 1)."""
+        mixed = (
+            world_x * 374761393
+            + world_y * 668265263
+            + self.seed * 2246822519
+            + salt * 3266489917
+        ) & 0xFFFFFFFF
+        return self._hash_u32(mixed) / 4294967296.0
+
+    def _pick_underground_block(self, world_x: int, y: int, surface_y: int) -> int:
+        """Wählt für tiefe Steinbereiche deterministisch passende Erze aus."""
+        depth_from_surface = max(0, surface_y - y)
+        if depth_from_surface < 4:
+            return STONE
+
+        # Mehr Erze in größerer Tiefe.
+        depth_factor = min(1.0, max(0.0, (depth_from_surface - 4) / 72.0))
+
+        # Grobe 2D-Patches (vein-artig), ohne teuren Noise-Overhead.
+        patch_x = world_x // 4
+        patch_y = y // 3
+        richness = 0.7 + 0.7 * self._rand01_2d(patch_x, patch_y, salt=719)
+
+        # Insgesamt weniger Erze; Kohle und Eisen in aehnlicher Hauefigkeit.
+        coal_chance = (0.008 + 0.030 * depth_factor) * richness
+        iron_chance = (0.007 + 0.028 * depth_factor) * richness
+
+        very_deep_limit = int(WORLD_HEIGHT * 0.25)
+        ultra_deep_limit = int(WORLD_HEIGHT * 0.16)
+        gold_chance = 0.0
+        diamond_chance = 0.0
+        if y <= very_deep_limit:
+            gold_chance = (0.0008 + 0.0065 * depth_factor) * richness
+        if y <= ultra_deep_limit:
+            diamond_chance = (0.00025 + 0.0035 * depth_factor) * richness
+
+        # Separate deterministische Rolls pro Erztyp verhindern Ueberlagerung.
+        diamond_roll = self._rand01_2d(world_x, y, salt=701)
+        gold_roll = self._rand01_2d(world_x, y, salt=703)
+        iron_roll = self._rand01_2d(world_x, y, salt=705)
+        coal_roll = self._rand01_2d(world_x, y, salt=707)
+
+        # Seltene Erze zuerst prüfen, damit deren Rarität erhalten bleibt.
+        if diamond_chance > 0 and diamond_roll < diamond_chance:
+            return DIAMOND_ORE
+        if gold_chance > 0 and gold_roll < gold_chance:
+            return GOLD_ORE
+        if iron_roll < iron_chance:
+            return IRON_ORE
+        if coal_roll < coal_chance:
+            return COAL_ORE
+        return STONE
 
     def _biome_value(self, world_x: int) -> float:
         """Langsame Biome-Kurve in etwa [-1, 1]."""
@@ -165,11 +232,12 @@ class WorldGenerator:
         for local_x in range(chunk.width):
             height = self.terrain_height(chunk_x, local_x)
             surface_heights[local_x] = height
+            world_x = chunk_x * CHUNK_WIDTH + local_x
             for y in range(chunk.height):
                 if y == 0:
                     block_id = BEDROCK
                 elif y < height - 2:
-                    block_id = STONE
+                    block_id = self._pick_underground_block(world_x, y, height)
                 elif y < height:
                     block_id = DIRT
                 elif y == height:

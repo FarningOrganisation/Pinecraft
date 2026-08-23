@@ -13,6 +13,12 @@ SAND = 4
 BEDROCK = 5
 OAK = 6
 LEAVES = 7
+COAL_ORE = 8
+IRON_ORE = 9
+GOLD_ORE = 10
+DIAMOND_ORE = 11
+
+from items import CHARCOAL, DIAMOND, GOLD_INGOT, IRON_INGOT
 
 BLOCKS = {
     GRASS: {"name": "Grass", "texture": "grass.png", "solid": True, "drop_id": DIRT},
@@ -22,6 +28,10 @@ BLOCKS = {
     BEDROCK: {"name": "Bedrock", "texture": "bedrock.png", "solid": True, "hardness": float("inf")},
     OAK: {"name": "Oak", "texture": "oak.png", "solid": True},
     LEAVES: {"name": "Leaves", "texture": "leaves.png", "solid": False},
+    COAL_ORE: {"name": "Coal Ore", "texture": "coal_ore.png", "solid": True, "hardness": 2.2, "drop_id": CHARCOAL},
+    IRON_ORE: {"name": "Iron Ore", "texture": "iron_ore.png", "solid": True, "hardness": 2.4, "drop_id": IRON_INGOT},
+    GOLD_ORE: {"name": "Gold Ore", "texture": "gold_ore.png", "solid": True, "hardness": 2.6, "drop_id": GOLD_INGOT},
+    DIAMOND_ORE: {"name": "Diamond Ore", "texture": "diamond_ore.png", "solid": True, "hardness": 3.0, "drop_id": DIAMOND},
 }
 
 
