@@ -58,6 +58,66 @@ class WorldGenerator:
         ) & 0xFFFFFFFF
         return self._hash_u32(mixed) / 4294967296.0
 
+    @staticmethod
+    def _smoothstep01(value: float) -> float:
+        """Glättet einen Wert aus [0, 1] für weichere Noise-Übergänge."""
+        v = max(0.0, min(1.0, value))
+        return v * v * (3.0 - 2.0 * v)
+
+    @staticmethod
+    def _lerp(a: float, b: float, t: float) -> float:
+        """Lineare Interpolation zwischen zwei Werten."""
+        return a + (b - a) * t
+
+    def _value_noise_2d(self, world_x: int, world_y: int, cell_size: int, salt: int) -> float:
+        """Deterministisches 2D-Value-Noise in [0, 1] auf Weltkoordinaten."""
+        if cell_size <= 1:
+            return self._rand01_2d(world_x, world_y, salt=salt)
+
+        gx0 = math.floor(world_x / cell_size)
+        gy0 = math.floor(world_y / cell_size)
+        gx1 = gx0 + 1
+        gy1 = gy0 + 1
+
+        tx = (world_x - gx0 * cell_size) / cell_size
+        ty = (world_y - gy0 * cell_size) / cell_size
+        sx = self._smoothstep01(tx)
+        sy = self._smoothstep01(ty)
+
+        n00 = self._rand01_2d(gx0, gy0, salt=salt)
+        n10 = self._rand01_2d(gx1, gy0, salt=salt)
+        n01 = self._rand01_2d(gx0, gy1, salt=salt)
+        n11 = self._rand01_2d(gx1, gy1, salt=salt)
+
+        ix0 = self._lerp(n00, n10, sx)
+        ix1 = self._lerp(n01, n11, sx)
+        return self._lerp(ix0, ix1, sy)
+
+    def _is_cave_air(self, world_x: int, y: int, surface_y: int) -> bool:
+        """Entscheidet deterministisch, ob ein Untergrund-Block als Höhle leer bleibt."""
+        if y <= 2:
+            return False
+
+        depth = surface_y - y
+        if depth < 6:
+            return False
+
+        depth_factor = min(1.0, max(0.0, (depth - 6) / 68.0))
+
+        # Zwei Skalen erzeugen verbundene Tunnel plus größere Kammern.
+        large = self._value_noise_2d(world_x, y, cell_size=18, salt=811)
+        medium = self._value_noise_2d(world_x, y, cell_size=9, salt=823)
+        chamber = self._value_noise_2d(world_x, y, cell_size=30, salt=839)
+
+        # Ridges statt Blobs: Nähe zur Mittellinie erzeugt gangartige Strukturen.
+        ridge_large = abs(large - 0.5) * 2.0
+        ridge_medium = abs(medium - 0.5) * 2.0
+        tunnel_signal = ridge_large * 0.68 + ridge_medium * 0.32
+
+        tunnel_threshold = 0.11 + 0.075 * depth_factor
+        chamber_open = chamber > (0.80 - 0.12 * depth_factor) and tunnel_signal < (0.22 + 0.04 * depth_factor)
+        return tunnel_signal < tunnel_threshold or chamber_open
+
     def _pick_underground_block(self, world_x: int, y: int, surface_y: int) -> int:
         """Wählt für tiefe Steinbereiche deterministisch passende Erze aus."""
         depth_from_surface = max(0, surface_y - y)
@@ -237,7 +297,10 @@ class WorldGenerator:
                 if y == 0:
                     block_id = BEDROCK
                 elif y < height - 2:
-                    block_id = self._pick_underground_block(world_x, y, height)
+                    if self._is_cave_air(world_x, y, height):
+                        block_id = AIR
+                    else:
+                        block_id = self._pick_underground_block(world_x, y, height)
                 elif y < height:
                     block_id = DIRT
                 elif y == height:

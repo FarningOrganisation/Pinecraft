@@ -453,7 +453,14 @@ class Player(AnimatedSprite):
     def start_mining(self, block_pos):
         """Startet einen Mining-Vorgang an einer gegebenen Blockposition."""
         if self.is_mining:
-            return
+            # Wenn die Animation im gleichen Frame bereits fertig ist,
+            # Ergebnis zuerst abschließen statt den neuen Klick zu verlieren.
+            if self.mining_animation.has_finished:
+                self.mining_finished = True
+                self.is_mining = False
+                self.release_mining_result(self.world)
+            else:
+                return
 
         block_id = self.world.get_block(*block_pos)
         if not is_block_breakable(block_id):

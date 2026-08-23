@@ -71,6 +71,9 @@ class GameWindow(arcade.Window):
         self.render_buffer_tiles = 24
         self.left_pressed = False
         self.right_pressed = False
+        self.left_mouse_down = False
+        self.mouse_screen_x = 0.0
+        self.mouse_screen_y = 0.0
         self.break_range = 3.5 * TILE_SIZE
         self.item_pull_radius = 4.5 * TILE_SIZE
         self.item_pickup_radius = 0.95 * TILE_SIZE
@@ -287,6 +290,13 @@ class GameWindow(arcade.Window):
         physics_delta = min(delta_time, 1 / 30)
         self.physics.update(self.player, physics_delta)
         self.player.update(physics_delta)
+
+        if self.left_mouse_down and not self.inventory_ui.visible and not self.player.is_mining:
+            target = self._get_block_from_mouse(self.mouse_screen_x, self.mouse_screen_y)
+            if target is not None:
+                tile_x, tile_y, _ = target
+                self.player.start_mining((tile_x, tile_y))
+
         for drop_id, tile_x, tile_y in self.player.consume_pending_item_drops():
             self._spawn_dropped_item(drop_id, tile_x, tile_y)
         self._update_dropped_items(physics_delta)
@@ -408,11 +418,15 @@ class GameWindow(arcade.Window):
 
     def on_mouse_press(self, x: float, y: float, button: int, modifiers: int):
         """Verarbeitet Links- und Rechtsklicks für Abbauen, Platzieren und Inventar-Interaktion."""
+        self.mouse_screen_x = x
+        self.mouse_screen_y = y
+
         if self.inventory_ui.visible:
             self.inventory_ui.handle_click(x, y, button, modifiers)
             return
 
         if button == arcade.MOUSE_BUTTON_LEFT:
+            self.left_mouse_down = True
             target = self._get_block_from_mouse(x, y)
             if target is None:
                 return
@@ -428,8 +442,21 @@ class GameWindow(arcade.Window):
 
     def on_mouse_release(self, x: float, y: float, button: int, modifiers: int):
         """Bricht den Mining-Vorgang ab, wenn die Taste vorzeitig losgelassen wird."""
+        self.mouse_screen_x = x
+        self.mouse_screen_y = y
         if button == arcade.MOUSE_BUTTON_LEFT:
+            self.left_mouse_down = False
             self.player.cancel_mining()
+
+    def on_mouse_motion(self, x: float, y: float, dx: float, dy: float):
+        """Merkt die letzte Mausposition für Hold-to-Mine."""
+        self.mouse_screen_x = x
+        self.mouse_screen_y = y
+
+    def on_mouse_drag(self, x: float, y: float, dx: float, dy: float, buttons: int, modifiers: int):
+        """Merkt die letzte Mausposition auch beim Ziehen."""
+        self.mouse_screen_x = x
+        self.mouse_screen_y = y
 
 
 def main():
