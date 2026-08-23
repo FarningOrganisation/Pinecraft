@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from blocks import AIR
+from blocks import AIR, is_block_solid
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
 
 
@@ -51,9 +51,12 @@ class Chunk:
 class World:
     """Objekt, das den aktuellen Zustand der Welt verwaltet."""
 
-    def __init__(self, seed: int = 1337, load_radius: int = 4, unload_radius: int = 6, generator=None):
+    def __init__(self, seed: int = 1337, load_radius: int = 3, unload_radius: int = 5, generator=None):
         self.seed = seed
         self.chunks: dict[int, Chunk] = {}
+        self.saved_chunk_blocks: dict[int, list[list[int]]] = {}
+        self.pending_generated_blocks: dict[int, dict[tuple[int, int], int]] = {}
+        self.changed_blocks: list[tuple[int, int, int, int]] = []
         self.load_radius = load_radius
         self.unload_radius = unload_radius
 
@@ -68,9 +71,57 @@ class World:
         """Generiert oder lädt den angegebenen Chunk."""
         return self.generator.generate_chunk(self, chunk_x)
 
-    def update_loaded_chunks(self, world_x: float):
-        """Lädt nur Chunks im aktiven Radius um den Spieler."""
-        self.generator.update_loaded_chunks(self, world_x)
+    def get_saved_chunk_blocks(self, chunk_x: int) -> list[list[int]] | None:
+        """Liefert gespeicherte Blockdaten für einen Chunk, falls vorhanden."""
+        blocks = self.saved_chunk_blocks.get(chunk_x)
+        if blocks is None:
+            return None
+        return [row[:] for row in blocks]
+
+    def save_chunk_blocks(self, chunk_x: int, blocks: list[list[int]]) -> None:
+        """Speichert einen Snapshot der Chunk-Blöcke persistent im Speicher."""
+        self.saved_chunk_blocks[chunk_x] = [row[:] for row in blocks]
+
+    def queue_generated_block(self, world_x: int, y: int, block_id: int) -> None:
+        """Merkt Welt-Generierungsblöcke ohne Chunk-Generierung im aktuellen Frame."""
+        if y < 0 or y >= WORLD_HEIGHT:
+            return
+
+        chunk_x, local_x = world_to_chunk_and_local(world_x)
+        loaded_chunk = self.chunks.get(chunk_x)
+        if loaded_chunk is not None:
+            old_block_id = loaded_chunk.get_block(local_x, y)
+            if old_block_id == block_id:
+                return
+            loaded_chunk.set_block(local_x, y, block_id)
+            self.changed_blocks.append((world_x, y, old_block_id, block_id))
+            return
+
+        saved_blocks = self.saved_chunk_blocks.get(chunk_x)
+        if saved_blocks is not None:
+            saved_blocks[y][local_x] = block_id
+            return
+
+        pending = self.pending_generated_blocks.setdefault(chunk_x, {})
+        pending[(local_x, y)] = block_id
+
+    def apply_pending_generated_blocks(self, chunk: Chunk) -> None:
+        """Überträgt geparkte Generierungsblöcke auf einen frisch erzeugten Chunk."""
+        pending = self.pending_generated_blocks.pop(chunk.chunk_x, None)
+        if not pending:
+            return
+
+        for (local_x, y), block_id in pending.items():
+            chunk.set_block(local_x, y, block_id)
+
+    def update_loaded_chunks(
+        self,
+        world_x: float,
+        max_loads: int | None = None,
+        max_unloads: int | None = None,
+    ):
+        """Lädt Chunks im Radius, optional mit Budget pro Aufruf."""
+        return self.generator.update_loaded_chunks(self, world_x, max_loads=max_loads, max_unloads=max_unloads)
 
     def get_loaded_chunk_count(self) -> int:
         """Gibt die Anzahl der aktuell geladenen Chunks zurück."""
@@ -93,13 +144,18 @@ class World:
         height = self.get_surface_height(world_x)
         return (height + 1) * TILE_SIZE
 
-    def get_block(self, world_x: int, y: int) -> int:
+    def get_block(self, world_x: int, y: int, generate_if_missing: bool = True) -> int:
         """Gibt einen Block an einer Weltposition zurück."""
         if y < 0 or y >= WORLD_HEIGHT:
             return AIR
 
         chunk_x, local_x = world_to_chunk_and_local(world_x)
-        chunk = self.generate_chunk(chunk_x)
+        if generate_if_missing:
+            chunk = self.generate_chunk(chunk_x)
+        else:
+            chunk = self.chunks.get(chunk_x)
+            if chunk is None:
+                return AIR
         return chunk.get_block(local_x, y)
 
     def set_block(self, world_x: int, y: int, block_id: int) -> None:
@@ -109,7 +165,19 @@ class World:
 
         chunk_x, local_x = world_to_chunk_and_local(world_x)
         chunk = self.generate_chunk(chunk_x)
+        old_block_id = chunk.get_block(local_x, y)
+        if old_block_id == block_id:
+            return
         chunk.set_block(local_x, y, block_id)
+        self.changed_blocks.append((world_x, y, old_block_id, block_id))
+
+    def consume_changed_blocks(self) -> list[tuple[int, int, int, int]]:
+        """Liefert und leert die Liste geänderter Blöcke als (x, y, alt, neu)."""
+        if not self.changed_blocks:
+            return []
+        changes = self.changed_blocks
+        self.changed_blocks = []
+        return changes
 
     def break_block(self, world_x: int, y: int) -> int:
         """Entfernt einen Block und liefert den alten Blocktyp zurück."""
@@ -135,8 +203,8 @@ class World:
 
         for tile_x in range(min_tile_x, max_tile_x + 1):
             for tile_y in range(min_tile_y, max_tile_y + 1):
-                block_id = self.get_block(tile_x, tile_y)
-                if block_id == AIR:
+                block_id = self.get_block(tile_x, tile_y, generate_if_missing=False)
+                if block_id == AIR or not is_block_solid(block_id):
                     continue
                 block_left = tile_x * TILE_SIZE
                 block_right = block_left + TILE_SIZE

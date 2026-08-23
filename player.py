@@ -10,7 +10,7 @@ from pathlib import Path
 import arcade
 
 from animated_sprite import AnimatedSprite
-from blocks import AIR, DIRT, GRASS, STONE, get_block_drop_id, get_block_hardness
+from blocks import AIR, DIRT, GRASS, STONE, get_block_drop_id, get_block_hardness, is_block_breakable
 from items import PICKAXE
 from inventory import Inventory
 from settings import (
@@ -26,7 +26,7 @@ from settings import (
     TILE_SIZE,
 )
 from sprite_animation import SpriteAnimation
-from world import World
+from world import World, world_to_chunk_and_local
 
 
 def _character_frames(*file_names):
@@ -133,6 +133,7 @@ class Player(AnimatedSprite):
         self.is_mining = False
         self.mining_finished = False
         self.world_dirty = False
+        self.dirty_chunk_xs: set[int] = set()
         self.mining_animation = SpriteAnimation(
             [
                 arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack1.png"),
@@ -382,6 +383,9 @@ class Player(AnimatedSprite):
             return False
 
         self.inventory.remove_item(selected_block, 1)
+        chunk_x, _ = world_to_chunk_and_local(tile_x)
+        self.dirty_chunk_xs.add(chunk_x)
+        self.world_dirty = True
         return True
 
     def update(self, delta_time: float):
@@ -393,8 +397,6 @@ class Player(AnimatedSprite):
                 self.is_mining = False
                 self.release_mining_result(self.world)
                 self.world_dirty = self.world is not None
-                if self.world is not None:
-                    self.world.update_loaded_chunks(self.center_x)
 
         if self.change_x < 0:
             self.facing_right = False
@@ -452,9 +454,12 @@ class Player(AnimatedSprite):
         if self.is_mining:
             return
 
+        block_id = self.world.get_block(*block_pos)
+        if not is_block_breakable(block_id):
+            return
+
         self.facing_right = self.world.to_world_position(*block_pos)[0] > self.center_x
 
-        block_id = self.world.get_block(*block_pos)
         hardness = get_block_hardness(block_id)
         held_entry = self._selected_held_entry()
         mining_speed = self.inventory.get_mining_speed(held_entry)
@@ -493,10 +498,20 @@ class Player(AnimatedSprite):
             self.world_dirty = False
             return None
 
+        if not is_block_breakable(block_id):
+            self.mining_target = None
+            self.mining_finished = False
+            self.is_mining = False
+            self.mining_animation.reset()
+            self.world_dirty = False
+            return None
+
         world.break_block(tile_x, tile_y)
         drop_id = get_block_drop_id(block_id)
         if drop_id is None:
             drop_id = block_id
+        chunk_x, _ = world_to_chunk_and_local(tile_x)
+        self.dirty_chunk_xs.add(chunk_x)
         preferred_slot = self.inventory.HOTBAR_START + self.selected_hotbar_slot
         self.inventory.add_item(drop_id, 1, preferred_slot_index=preferred_slot)
         self.mining_target = None

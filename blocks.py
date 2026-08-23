@@ -1,5 +1,6 @@
 """Block-Definitionen und Texturen für Pinecraft."""
 
+import math
 from pathlib import Path
 
 import arcade
@@ -9,12 +10,18 @@ GRASS = 1
 DIRT = 2
 STONE = 3
 SAND = 4
+BEDROCK = 5
+OAK = 6
+LEAVES = 7
 
 BLOCKS = {
     GRASS: {"name": "Grass", "texture": "grass.png", "solid": True, "drop_id": DIRT},
     DIRT: {"name": "Dirt", "texture": "dirt.png", "solid": True},
     STONE: {"name": "Stone", "texture": "stone.png", "solid": True, "hardness": 2},
     SAND: {"name": "Sand", "texture": "sand.png", "solid": True},
+    BEDROCK: {"name": "Bedrock", "texture": "bedrock.png", "solid": True, "hardness": float("inf")},
+    OAK: {"name": "Oak", "texture": "oak.png", "solid": True},
+    LEAVES: {"name": "Leaves", "texture": "leaves.png", "solid": False},
 }
 
 
@@ -37,6 +44,19 @@ def get_block_hardness(block_id: int) -> float:
     except (TypeError, ValueError):
         return 1.0
     return max(0.01, hardness_value)
+
+
+def is_block_breakable(block_id: int) -> bool:
+    """True, wenn ein Block abbaubar ist (endliche Hardness)."""
+    return math.isfinite(get_block_hardness(block_id))
+
+
+def is_block_solid(block_id: int) -> bool:
+    """True, wenn ein Block kollidierbar ist."""
+    block_definition = BLOCKS.get(block_id)
+    if block_definition is None:
+        return False
+    return bool(block_definition.get("solid", True))
 
 TEXTURE_DIR = Path(__file__).resolve().parent / "assets" / "textures" / "blocks"
 BLOCK_TEXTURES = {

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 
-from blocks import AIR
+from blocks import AIR, is_block_solid
 from settings import GRAVITY, TILE_SIZE
 
 
@@ -40,7 +40,8 @@ class AABBPhysics:
         ground_tile_y = int(math.floor(probe_y / TILE_SIZE))
 
         for tile_x in range(min_tile_x, max_tile_x + 1):
-            if self.world.get_block(tile_x, ground_tile_y) != AIR:
+            block_id = self.world.get_block(tile_x, ground_tile_y, generate_if_missing=False)
+            if block_id != AIR and is_block_solid(block_id):
                 return True
         return False
 

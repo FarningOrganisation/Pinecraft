@@ -10,21 +10,22 @@ from pathlib import Path
 
 import arcade
 
-from blocks import AIR
+from blocks import AIR, BLOCK_TEXTURES
 from hotbar import Hotbar
 from inventory_ui import InventoryUI
 from physics import AABBPhysics
 from player import Player
 from settings import (
     BACKGROUND_COLOR,
+    CHUNK_WIDTH,
     PLAYER_SPEED,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
     TILE_SIZE,
     WINDOW_TITLE,
 )
-from world import World
-from world_generation import build_world_sprite_list
+from world import World, world_to_chunk_and_local
+from world_generation import build_chunk_sprite_list
 
 
 class GameWindow(arcade.Window):
@@ -41,15 +42,146 @@ class GameWindow(arcade.Window):
         self.mining_sprite_list.append(self.player.mining_animation)
         self.hotbar = Hotbar(self.player)
         self.inventory_ui = InventoryUI(self.player, SCREEN_WIDTH, SCREEN_HEIGHT)
-        self.world_sprite_list = arcade.SpriteList()
+        self.chunk_sprite_lists: dict[int, arcade.SpriteList] = {}
+        self.chunk_sprite_maps: dict[int, dict[tuple[int, int], arcade.Sprite]] = {}
         self.camera = arcade.Camera2D()
         self.ui_camera = arcade.Camera2D()
         self.physics = AABBPhysics(self.world)
-        self.last_world_center_x = 0.0
+        self.render_tile_range: tuple[int, int] | None = None
         self.frame_count = 0
+        self.fps_time_accumulator = 0.0
+        self.fps_frame_accumulator = 0
+        self.fps_display = 0.0
+        self.fps_text = arcade.Text(
+            text="FPS:   0.0",
+            x=20,
+            y=self.height - 16,
+            color=arcade.color.WHITE,
+            font_size=16,
+            anchor_x="left",
+            anchor_y="top",
+        )
+        self.max_chunk_loads_per_frame = 1
+        self.max_chunk_unloads_per_frame = 1
+        self.visible_margin_tiles = 4
+        self.render_buffer_tiles = 24
         self.left_pressed = False
         self.right_pressed = False
-        self.break_range = 2.5 * TILE_SIZE
+        self.break_range = 3.5 * TILE_SIZE
+
+    def _clamped_camera_position(self):
+        """Klemmt die Kamera, damit man nicht unter die Welt schauen kann."""
+        min_camera_y = self.height / 2
+        camera_y = max(self.player.center_y, min_camera_y)
+        return self.player.center_x, camera_y
+
+    def _rebuild_world_sprites(self):
+        """Erzeugt den Chunk-Sprite-Cache für den aktuellen Sichtbereich neu."""
+        min_tile_y, max_tile_y = self._get_target_render_tile_range()
+        self.chunk_sprite_lists = {}
+        self.chunk_sprite_maps = {}
+        for chunk_x in sorted(self.world.chunks):
+            chunk = self.world.chunks[chunk_x]
+            sprite_list, sprite_map = build_chunk_sprite_list(chunk_x, chunk, min_tile_y, max_tile_y)
+            self.chunk_sprite_lists[chunk_x] = sprite_list
+            self.chunk_sprite_maps[chunk_x] = sprite_map
+        self.render_tile_range = (min_tile_y, max_tile_y)
+
+    def _get_visible_tile_range(self, margin_tiles: int | None = None) -> tuple[int, int]:
+        """Berechnet den vertikal sichtbaren Tile-Bereich der Kamera."""
+        if margin_tiles is None:
+            margin_tiles = self.visible_margin_tiles
+        half_h = self.height / 2
+        min_tile_y = max(0, int((self.camera.position[1] - half_h) // TILE_SIZE) - margin_tiles)
+        max_tile_y = int((self.camera.position[1] + half_h) // TILE_SIZE) + margin_tiles
+        return min_tile_y, max_tile_y
+
+    def _get_target_render_tile_range(self) -> tuple[int, int]:
+        """Sichtbereich plus Puffer, um häufige Rebuilds beim Springen zu vermeiden."""
+        visible_min, visible_max = self._get_visible_tile_range()
+        return (
+            max(0, visible_min - self.render_buffer_tiles),
+            visible_max + self.render_buffer_tiles,
+        )
+
+    def _get_visible_chunk_range(self, margin_chunks: int = 1) -> tuple[int, int]:
+        """Berechnet den horizontal sichtbaren Chunk-Bereich der Kamera."""
+        half_w = self.width / 2
+        left_x = self.camera.position[0] - half_w - margin_chunks * CHUNK_WIDTH * TILE_SIZE
+        right_x = self.camera.position[0] + half_w + margin_chunks * CHUNK_WIDTH * TILE_SIZE
+        min_tile_x = int(left_x // TILE_SIZE)
+        max_tile_x = int(right_x // TILE_SIZE)
+        min_chunk_x, _ = world_to_chunk_and_local(min_tile_x)
+        max_chunk_x, _ = world_to_chunk_and_local(max_tile_x)
+        return min_chunk_x, max_chunk_x
+
+    def _sync_chunk_sprite_cache(self, loaded_chunks: list[int], unloaded_chunks: list[int]):
+        """Aktualisiert nur die geänderten Chunk-Sprites."""
+        for chunk_x in unloaded_chunks:
+            self.chunk_sprite_lists.pop(chunk_x, None)
+            self.chunk_sprite_maps.pop(chunk_x, None)
+
+        if not loaded_chunks:
+            return
+
+        if self.render_tile_range is None:
+            min_tile_y, max_tile_y = self._get_target_render_tile_range()
+            self.render_tile_range = (min_tile_y, max_tile_y)
+        else:
+            min_tile_y, max_tile_y = self.render_tile_range
+
+        for chunk_x in loaded_chunks:
+            chunk = self.world.chunks.get(chunk_x)
+            if chunk is None:
+                continue
+            sprite_list, sprite_map = build_chunk_sprite_list(chunk_x, chunk, min_tile_y, max_tile_y)
+            self.chunk_sprite_lists[chunk_x] = sprite_list
+            self.chunk_sprite_maps[chunk_x] = sprite_map
+
+    def _apply_world_block_diffs(self, changes: list[tuple[int, int, int, int]]):
+        """Aktualisiert Sprites einzelner geänderter Blöcke ohne Chunk-Rebuild."""
+        if not changes:
+            return
+
+        if self.render_tile_range is None:
+            min_tile_y, max_tile_y = self._get_target_render_tile_range()
+            self.render_tile_range = (min_tile_y, max_tile_y)
+        else:
+            min_tile_y, max_tile_y = self.render_tile_range
+
+        for tile_x, tile_y, _old_block_id, new_block_id in changes:
+            chunk_x, local_x = world_to_chunk_and_local(tile_x)
+            sprite_list = self.chunk_sprite_lists.get(chunk_x)
+            if sprite_list is None:
+                continue
+
+            sprite_map = self.chunk_sprite_maps.setdefault(chunk_x, {})
+            key = (local_x, tile_y)
+            existing_sprite = sprite_map.get(key)
+
+            in_visible_band = min_tile_y <= tile_y <= max_tile_y
+            texture = BLOCK_TEXTURES.get(new_block_id)
+            should_render = in_visible_band and new_block_id != AIR and texture is not None
+
+            if existing_sprite is not None and not should_render:
+                sprite_list.remove(existing_sprite)
+                sprite_map.pop(key, None)
+                continue
+
+            if not should_render:
+                continue
+
+            if existing_sprite is not None:
+                existing_sprite.texture = texture
+                continue
+
+            sprite = arcade.Sprite(texture)
+            sprite.center_x = (chunk_x * self.world.chunks[chunk_x].width + local_x + 0.5) * TILE_SIZE
+            sprite.center_y = (tile_y + 0.5) * TILE_SIZE
+            sprite.width = TILE_SIZE
+            sprite.height = TILE_SIZE
+            sprite_list.append(sprite)
+            sprite_map[key] = sprite
 
     def _get_local_blocks(self, left: float, right: float, bottom: float, top: float):
         """Gibt nur die relevanten Blöcke um den Spieler zurück."""
@@ -76,14 +208,23 @@ class GameWindow(arcade.Window):
         self.hotbar = Hotbar(self.player)
         self.inventory_ui = InventoryUI(self.player, SCREEN_WIDTH, SCREEN_HEIGHT)
         self.physics = AABBPhysics(self.world)
-        self.last_world_center_x = self.player.center_x
-        self.camera.position = (self.player.center_x, self.player.center_y)
+        self.chunk_sprite_lists = {}
+        self.chunk_sprite_maps = {}
+        self.render_tile_range = None
+        self.camera.position = self._clamped_camera_position()
         self.world.update_loaded_chunks(self.player.center_x)
-        self.world_sprite_list = build_world_sprite_list(self.world, center_world_x=self.player.center_x)
+        self._rebuild_world_sprites()
 
     def on_update(self, delta_time: float):
         """Wird regelmäßig pro Frame aufgerufen."""
         self.frame_count += 1
+        self.fps_time_accumulator += delta_time
+        self.fps_frame_accumulator += 1
+        if self.fps_time_accumulator >= 0.25:
+            self.fps_display = self.fps_frame_accumulator / self.fps_time_accumulator
+            self.fps_time_accumulator = 0.0
+            self.fps_frame_accumulator = 0
+            self.fps_text.text = f"FPS: {self.fps_display:5.1f}"
 
         if self.left_pressed and not self.right_pressed:
             self.player.move_left()
@@ -92,8 +233,9 @@ class GameWindow(arcade.Window):
         elif self.player.on_ground:
             self.player.stop_horizontal()
 
-        self.physics.update(self.player, delta_time)
-        self.player.update(delta_time)
+        physics_delta = min(delta_time, 1 / 30)
+        self.physics.update(self.player, physics_delta)
+        self.player.update(physics_delta)
 
         if self.player.mining_target is not None:
             tile_x, tile_y = self.player.mining_target
@@ -104,16 +246,35 @@ class GameWindow(arcade.Window):
         else:
             self.player.mining_animation.visible = False
 
-        self.camera.position = (self.player.center_x, self.player.center_y)
+        self.camera.position = self._clamped_camera_position()
+
+        visible_range = self._get_visible_tile_range()
+        did_full_rebuild = False
+        if self.render_tile_range is None:
+            self._rebuild_world_sprites()
+            did_full_rebuild = True
+        else:
+            render_min, render_max = self.render_tile_range
+            visible_min, visible_max = visible_range
+            if visible_min < render_min or visible_max > render_max:
+                self._rebuild_world_sprites()
+                did_full_rebuild = True
+
+        block_changes = self.world.consume_changed_blocks()
+        if block_changes and not did_full_rebuild:
+            self._apply_world_block_diffs(block_changes)
 
         if self.player.world_dirty:
-            self.world_sprite_list = build_world_sprite_list(self.world, center_world_x=self.player.center_x)
             self.player.world_dirty = False
+            self.player.dirty_chunk_xs.clear()
 
-        if abs(self.player.center_x - self.last_world_center_x) > 128:
-            self.last_world_center_x = self.player.center_x
-            self.world.update_loaded_chunks(self.player.center_x)
-            self.world_sprite_list = build_world_sprite_list(self.world, center_world_x=self.player.center_x)
+        loaded_chunks, unloaded_chunks = self.world.update_loaded_chunks(
+            self.player.center_x,
+            max_loads=self.max_chunk_loads_per_frame,
+            max_unloads=self.max_chunk_unloads_per_frame,
+        )
+        if loaded_chunks or unloaded_chunks:
+            self._sync_chunk_sprite_cache(loaded_chunks, unloaded_chunks)
 
     def _screen_to_world(self, screen_x: float, screen_y: float):
         """Konvertiert Bildschirmkoordinaten in Weltkoordinaten."""
@@ -141,7 +302,11 @@ class GameWindow(arcade.Window):
         self.clear()
         self.camera.use()
 
-        self.world_sprite_list.draw()
+        min_chunk_x, max_chunk_x = self._get_visible_chunk_range()
+        for chunk_x in range(min_chunk_x, max_chunk_x + 1):
+            chunk_sprites = self.chunk_sprite_lists.get(chunk_x)
+            if chunk_sprites is not None:
+                chunk_sprites.draw()
         self.player.draw_held_item(layer="back")
         self.player_sprite_list.draw()
         self.player.draw_held_item(layer="front")
@@ -150,32 +315,8 @@ class GameWindow(arcade.Window):
         self.ui_camera.use()
         self.hotbar.draw()
         self.inventory_ui.draw()
-
-        arcade.draw_text(
-            "Milestone 8: Hotbar & Placement",
-            self.width / 2,
-            self.height - 30,
-            arcade.color.WHITE,
-            20,
-            anchor_x="center",
-            anchor_y="center",
-        )
-
-        inventory_text = " | ".join(
-            f"{self.player.inventory.get_display_name(key)}: {value}"
-            for key, value in self.player.inventory.items()
-        )
-        arcade.draw_text(
-            inventory_text,
-            20,
-            self.height - 20,
-            arcade.color.WHITE,
-            16,
-            anchor_x="left",
-            anchor_y="top",
-        )
-
-        
+        self.fps_text.y = self.height - 16
+        self.fps_text.draw()
 
     def on_key_press(self, symbol: int, modifiers: int):
         """Reagiert auf Tastatureingaben."""
@@ -228,8 +369,7 @@ class GameWindow(arcade.Window):
         if button == arcade.MOUSE_BUTTON_RIGHT:
             world_x, world_y = self._screen_to_world(x, y)
             tile_x, tile_y = self.world.to_block_position(world_x, world_y)
-            if self.player.place_selected_block(self.world, tile_x, tile_y):
-                self.world_sprite_list = build_world_sprite_list(self.world, center_world_x=self.player.center_x)
+            self.player.place_selected_block(self.world, tile_x, tile_y)
 
     def on_mouse_release(self, x: float, y: float, button: int, modifiers: int):
         """Bricht den Mining-Vorgang ab, wenn die Taste vorzeitig losgelassen wird."""
