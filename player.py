@@ -54,7 +54,11 @@ class Player(AnimatedSprite):
                 loop=True,
             ),
             "jumping": SpriteAnimation(_character_frames("steve_jump.png"), fps=1, loop=False),
-            "attacking": SpriteAnimation(_character_frames("steve_idle.png"), fps=1, loop=True),
+            "attacking": SpriteAnimation(
+                _character_frames("steve_mining01.png", "steve_mining02.png"),
+                fps=5.0,
+                loop=True,
+            ),
             "mining": SpriteAnimation(
                 _character_frames("steve_mining01.png", "steve_mining02.png"),
                 fps=5.0, loop=True),
@@ -199,21 +203,8 @@ class Player(AnimatedSprite):
         self.attack_animation.center_y = self.center_y + self.height * 0.12
 
     def draw_attack_animation(self):
-        """Zeichnet die aktuelle Attack-Animation am Spieler."""
-        if not self.is_attacking or self.attack_animation.texture is None:
-            return
-
-        self._sync_attack_animation_position()
-        texture = self.attack_animation.texture
-        texture_width = texture.width * 0.85
-        texture_height = texture.height * 0.85
-        rect = arcade.rect.XYWH(
-            self.attack_animation.center_x,
-            self.attack_animation.center_y,
-            texture_width,
-            texture_height,
-        )
-        arcade.draw_texture_rect(texture, rect, alpha=255)
+        """Attack-Overlay deaktiviert; Angriff wirkt nur über Zustand und Hitbox."""
+        return
 
     def get_attack_hitbox(self) -> tuple[float, float, float, float]:
         """Liefert die aktuelle Angriffs-Hitbox als (left, right, bottom, top)."""

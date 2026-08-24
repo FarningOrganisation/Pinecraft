@@ -848,7 +848,6 @@ class GameWindow(arcade.Window):
             self.player.draw_held_item(layer="back")
             self.player_sprite_list.draw()
             self.player.draw_held_item(layer="front")
-            self.player.draw_attack_animation()
             self.mining_sprite_list.draw()
             self._draw_underground_darkness_overlay()
 
