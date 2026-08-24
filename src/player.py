@@ -10,8 +10,14 @@ import math
 import arcade
 
 from animated_sprite import AnimatedSprite
-from blocks import AIR, DIRT, GRASS, OAK, STONE, get_block_drop_id, get_block_hardness, is_block_breakable, is_block_solid
-from items import PICKAXE, STONE_SWORD, TORCH
+from blocks import (
+    AIR, DIRT, GRASS, OAK, STONE,
+    get_block_drop_id, 
+    get_block_hardness, 
+    is_block_breakable, 
+    is_block_solid
+)
+from items import STONE_PICKAXE, STONE_SWORD, TORCH
 from inventory import Inventory
 from settings import (
     GROUND_Y,
@@ -81,24 +87,17 @@ class Player(AnimatedSprite):
         self.scale_y = 1.0
         self.inventory = Inventory({GRASS: 12, DIRT: 12, STONE: 12})
         hotbar_start = self.inventory.HOTBAR_START
-        self.inventory.slots[hotbar_start + 0].item = PICKAXE
+        self.inventory.slots[hotbar_start + 0].item = STONE_PICKAXE
         self.inventory.slots[hotbar_start + 0].count = 1
         self.inventory.slots[hotbar_start + 1].item = TORCH
         self.inventory.slots[hotbar_start + 1].count = 12
         self.inventory.slots[hotbar_start + 2].item = STONE_SWORD
         self.inventory.slots[hotbar_start + 2].count = 1
-        self.inventory.slots[hotbar_start + 3].item = GRASS
+        self.inventory.slots[hotbar_start + 3].item = DIRT
         self.inventory.slots[hotbar_start + 3].count = 12
-        self.inventory.slots[hotbar_start + 4].item = DIRT
-        self.inventory.slots[hotbar_start + 4].count = 12
-        self.inventory.slots[hotbar_start + 5].item = STONE
-        self.inventory.slots[hotbar_start + 5].count = 12
-        self.inventory.slots[hotbar_start + 6].item = GRASS
-        self.inventory.slots[hotbar_start + 6].count = 12
-        self.inventory.slots[hotbar_start + 7].item = DIRT
-        self.inventory.slots[hotbar_start + 7].count = 12
-        self.inventory.slots[hotbar_start + 8].item = STONE
-        self.inventory.slots[hotbar_start + 8].count = 12
+        self.inventory.slots[hotbar_start + 3].item = STONE
+        self.inventory.slots[hotbar_start + 3].count = 24
+
         self.selected_hotbar_slot = 0
         self.max_health = 8
         self.health = self.max_health

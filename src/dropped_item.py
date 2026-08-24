@@ -58,7 +58,8 @@ class DroppedItem:
         dist = math.hypot(dx, dy)
 
         if 0.0 < dist <= pull_radius:
-            strength = 620.0 * (1.0 - dist / pull_radius)
+            # Nahe am Spieler übersteigt der Zug die Schwerkraft, damit das Item nach oben fliegt.
+            strength = (gravity * 1.6) * (1.0 - dist / pull_radius)
             self.vx += (dx / dist) * strength * delta_time
             self.vy += (dy / dist) * strength * delta_time
 
