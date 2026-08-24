@@ -199,12 +199,12 @@ class GameWindow(arcade.Window):
         return False
 
     def _ambient_color(self) -> tuple[int, int, int]:
-        """Am Tag darf das Ambient-Lighting nicht dunkler machen; nur Nacht und Dämmerung färben die Szene."""
+        """Am Tag hell genug für natürliche Farben, aber nicht so nah an Weiß, dass die Tiefenmaske vollständig weggewischt wird."""
         day_factor = self._day_factor()
-        if day_factor >= 0.25:
-            return (255, 255, 255)
+        if day_factor >= 0.45:
+            return (200, 208, 220)
         if day_factor > 0.10:
-            return self._lerp_color((80, 90, 120), (255, 255, 255), (day_factor - 0.10) / (0.25 - 0.10))
+            return self._lerp_color((80, 90, 120), (200, 208, 220), (day_factor - 0.10) / (0.45 - 0.10))
         return (55, 66, 95)
 
     def _draw_sky_shader(self):
@@ -335,9 +335,9 @@ class GameWindow(arcade.Window):
             if opacity <= 0.0:
                 continue
             gap = y - (surface_y + 1)
-            shadow_bonus += opacity * (0.64 / (1.0 + gap * 0.22))
+            shadow_bonus += opacity * (0.92 / (1.0 + gap * 0.18))
 
-        return surface_y, min(2.4, shadow_bonus)
+        return surface_y, min(3.4, shadow_bonus)
 
     def _torch_shadow_positions(self) -> list[tuple[int, int]]:
         """Positionsliste aller Lichtquellen, die die Dunkelheitsmaske aufhellen sollen."""
@@ -389,10 +389,8 @@ class GameWindow(arcade.Window):
             column_shadow_strength[tile_x] = local_shadow * canopy_weight
 
         day_factor = self._day_factor()
-        darkness_scale = 0.14 + (1.0 - day_factor) * 1.05
-
-        if day_factor >= 0.30:
-            darkness_scale *= 0.15
+        darkness_scale = 0.42 + (1.0 - day_factor) * 2.2
+        daylight_alpha_scale = 0.62 + (1.0 - day_factor) * 0.88
 
         for tile_x in range(min_tile_x, max_tile_x + 1):
             for tile_y in range(min_tile_y, max_tile_y + 1):
@@ -404,9 +402,9 @@ class GameWindow(arcade.Window):
                     vertical_depth = max(0.0, (source_surface_y + 1) - tile_y)
                     if vertical_depth > 0.0:
                         shadow_strength = column_shadow_strength.get(source_x, shadow_bonus)
-                        shadow_depth_factor = min(1.0, vertical_depth / 6.0)
-                        vertical_depth += shadow_strength * shadow_depth_factor
-                    lateral_penalty = abs(dx) * 2.0
+                        shadow_depth_factor = min(1.0, vertical_depth / 5.0)
+                        vertical_depth += shadow_strength * (1.6 + shadow_depth_factor)
+                    lateral_penalty = abs(dx) * 1.8
                     effective_depth = vertical_depth + lateral_penalty
                     if effective_depth < min_effective_depth:
                         min_effective_depth = effective_depth
@@ -414,11 +412,9 @@ class GameWindow(arcade.Window):
                 if min_effective_depth <= 0:
                     continue
 
-                depth_after_threshold = max(0.0, min_effective_depth - 1.0)
-                alpha = int(min(220, (depth_after_threshold**1.22) * 10.0 * darkness_scale))
-
-                if day_factor >= 0.65:
-                    alpha = max(0, alpha // 10)
+                depth_after_threshold = max(0.0, (min_effective_depth - 0.8) * 1.6)
+                alpha = int(min(255, (depth_after_threshold**1.28) * 15.0 * darkness_scale))
+                alpha = int(alpha * daylight_alpha_scale)
 
                 torch_boost = 0.0
                 for torch_tile_x, torch_tile_y in torch_positions:
