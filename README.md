@@ -150,7 +150,7 @@ Hinweis:
 
 - Erst mit fixer Chance starten, z. B. 5 Prozent.
 
-### ⭐⭐ Challenge 5: Sword-Crafting-Rezept
+### ⭐ Challenge 5: Sword-Crafting-Rezept
 
 Idee:
 
@@ -215,6 +215,54 @@ Einstiegspunkt:
 Hinweis:
 
 - Erst die Items sichtbar machen, dann Werte wie `mining_speed` feinjustieren.
+
+### ⭐ Challenge 9: Hintergrundmusik beim Spielen
+
+Idee:
+
+- Beim Starten des Spiels soll Musik im Hintergrund laufen.
+
+Einstiegspunkt:
+
+- `src/game.py` (Initialisierung, Setup, Spielstart)
+
+Hinweis:
+
+- Nutzt eine Datei aus `assets/sounds/`.
+- Startet zunächst mit einer Schleife (Loop), Lautstärke später feinjustieren.
+
+### ⭐⭐ Challenge 10: Soundeffekte für Mining und Angriff
+
+Idee:
+
+- Beim Abbauen eines Blocks und beim Angriff sollen kurze Soundeffekte abgespielt werden.
+
+Einstiegspunkt:
+
+- `src/player.py` (`start_mining`, `release_mining_result`, `start_attack`)
+- `src/game.py` (Input-Pfade in `on_mouse_press`)
+
+Hinweis:
+
+- Erst einfache One-Shot-Sounds abspielen.
+- Danach optional unterscheiden: Treffer-Sound vs. Fehlschlag-Sound.
+
+### ⭐⭐⭐ Challenge 11: Hurt-Animation + Knockback für den Spieler
+
+Idee:
+
+- Wenn der Spieler Schaden bekommt, soll er eine kurze Hurt-Animation zeigen und zurückgestoßen werden.
+
+Einstiegspunkt:
+
+- `src/enemies/enemy.py` (`handle_contact_damage`)
+- `src/player.py` (neuer Hurt-Zustand, Timer, visuelles Feedback)
+- `src/physics.py` (Rückstoß sauber mit Kollisionen zusammenspielen lassen)
+
+Hinweis:
+
+- Startet mit kleinem Knockback und kurzer Unverwundbarkeitszeit.
+- Achtet darauf, dass der Spieler nach der Hurt-Phase wieder normal steuerbar ist.
 
 ## Unterrichtsmodus: schnell erweitern
 
