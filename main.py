@@ -106,6 +106,12 @@ class GameWindow(arcade.Window):
         self.sun_radius = 34
         self.moon_radius = 26
         self.celestial_size_px = 35
+        ui_texture_dir = Path(__file__).resolve().parent / "assets" / "textures" / "ui"
+        self.heart_full_texture = arcade.load_texture(ui_texture_dir / "heart_full.png")
+        self.heart_empty_texture = arcade.load_texture(ui_texture_dir / "heart_empty.png")
+        self.heart_size = 16
+        self.heart_gap = 2
+        self.game_over = False
 
     def _lerp_color(self, a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
         """Wrapper to the lighting system implementation."""
@@ -182,6 +188,100 @@ class GameWindow(arcade.Window):
             center_y = (tile_y + 0.5) * TILE_SIZE
             rect = arcade.rect.XYWH(center_x, center_y, draw_size, draw_size)
             arcade.draw_texture_rect(texture, rect, alpha=255)
+
+    def _draw_player_health(self):
+        """Zeichnet die Herzen links oberhalb der Hotbar."""
+        heart_count = max(0, int(getattr(self.player, "max_health", 0)))
+        if heart_count <= 0:
+            return
+
+        start_x = self.hotbar.slot_x_start
+        start_y = self.hotbar.slot_y + self.hotbar.slot_size + 16
+        current_health = max(0, int(getattr(self.player, "health", 0)))
+
+        for index in range(heart_count):
+            texture = self.heart_full_texture if index < current_health else self.heart_empty_texture
+            rect = arcade.rect.XYWH(
+                start_x + index * (self.heart_size + self.heart_gap) + self.heart_size / 2,
+                start_y + self.heart_size / 2,
+                self.heart_size,
+                self.heart_size,
+            )
+            arcade.draw_texture_rect(texture, rect, alpha=255)
+
+    def _draw_game_over_overlay(self):
+        """Zeichnet einen einfachen Game-Over-Bildschirm über der Szene."""
+        arcade.draw_rect_filled(
+            arcade.rect.XYWH(
+                self.width / 2,
+                self.height / 2,
+                self.width,
+                self.height),
+            (0, 0, 0, 180),
+        )
+        arcade.draw_text(
+            "GAME OVER",
+            self.width / 2,
+            self.height / 2 + 28,
+            arcade.color.WHITE,
+            font_size=34,
+            anchor_x="center",
+            anchor_y="center",
+            bold=True,
+        )
+        arcade.draw_text(
+            "Press Enter to restart",
+            self.width / 2,
+            self.height / 2 - 12,
+            arcade.color.WHITE,
+            font_size=18,
+            anchor_x="center",
+            anchor_y="center",
+        )
+
+    def _enemy_under_mouse(self, screen_x: float, screen_y: float):
+        """Liefert den Feind unter der Maus oder None."""
+        world_x, world_y = self._screen_to_world(screen_x, screen_y)
+        for enemy in reversed(self.enemies):
+            left = enemy.center_x - enemy.collision_width / 2
+            right = enemy.center_x + enemy.collision_width / 2
+            bottom = enemy.center_y - enemy.collision_height / 2
+            top = enemy.center_y + enemy.collision_height / 2
+            if left <= world_x <= right and bottom <= world_y <= top:
+                return enemy
+        return None
+
+    def _resolve_player_attack(self):
+        """Verarbeitet die aktive Nahkampf-Hitbox gegen alle Gegner."""
+        if not self.player.is_attacking:
+            return
+
+        hit_left, hit_right, hit_bottom, hit_top = self.player.get_attack_hitbox()
+        hit_direction = 1 if self.player.facing_right else -1
+
+        for enemy in self.enemies:
+            if not getattr(enemy, "alive", True):
+                continue
+
+            enemy_id = id(enemy)
+            if enemy_id in self.player.attack_hit_targets:
+                continue
+
+            enemy_left = enemy.center_x - enemy.collision_width / 2
+            enemy_right = enemy.center_x + enemy.collision_width / 2
+            enemy_bottom = enemy.center_y - enemy.collision_height / 2
+            enemy_top = enemy.center_y + enemy.collision_height / 2
+
+            if hit_right < enemy_left or hit_left > enemy_right:
+                continue
+            if hit_top < enemy_bottom or hit_bottom > enemy_top:
+                continue
+
+            self.player.attack_hit_targets.add(enemy_id)
+            enemy.apply_knockback(hit_direction * 180.0, 120.0, stun_duration=0.35)
+            killed = enemy.take_damage(self.player.attack_damage)
+            if killed:
+                continue
 
     def _sync_torch_lights(self):
         """Synchronisiert Spieler- und Welt-Fackellichter mit dem aktuellen Zustand."""
@@ -448,6 +548,7 @@ class GameWindow(arcade.Window):
 
     def setup(self):
         """Initialisiert den Spielzustand."""
+        self.game_over = False
         self.frame_count = 0
         self.world = World()
         self.player = Player(world=self.world)
@@ -502,6 +603,9 @@ class GameWindow(arcade.Window):
 
     def on_update(self, delta_time: float):
         """Wird regelmäßig pro Frame aufgerufen."""
+        if self.game_over:
+            return
+
         self.frame_count += 1
         if self.day_length_seconds > 0:
             self.time_of_day = (self.time_of_day + delta_time / self.day_length_seconds) % 1.0
@@ -521,8 +625,13 @@ class GameWindow(arcade.Window):
         elif self.player.on_ground:
             self.player.stop_horizontal()
 
+        was_on_ground = self.player.on_ground
         physics_delta = min(delta_time, 1 / 30)
         self.physics.update(self.player, physics_delta)
+        if was_on_ground and not self.player.on_ground:
+            self.player.begin_fall_tracking()
+        elif not was_on_ground and self.player.on_ground:
+            self.player.apply_fall_damage()
         self.player.update(physics_delta)
 
         if self.left_mouse_down and not self.inventory_ui.visible:
@@ -551,6 +660,8 @@ class GameWindow(arcade.Window):
             self.player.mining_animation.visible = True
         else:
             self.player.mining_animation.visible = False
+
+        self._resolve_player_attack()
 
         self.camera.position = self._clamped_camera_position()
 
@@ -584,6 +695,10 @@ class GameWindow(arcade.Window):
 
         self._sync_torch_lights()
         self._update_enemies(delta_time)
+
+        if self.player.health <= 0:
+            self.player.health = 0
+            self.game_over = True
 
     def _screen_to_world(self, screen_x: float, screen_y: float):
         """Konvertiert Bildschirmkoordinaten in Weltkoordinaten."""
@@ -730,27 +845,32 @@ class GameWindow(arcade.Window):
             self._draw_placed_world_items()
             self.dropped_item_sprite_list.draw()
             self.enemy_sprite_list.draw()
-            for enemy in self.enemies:
-                screen_x = enemy.center_x - self.camera.position[0] + self.width / 2
-                screen_y = enemy.center_y - self.camera.position[1] + self.height / 2
-                arcade.draw_circle_filled(screen_x, screen_y, 18, (60, 220, 255, 150))
-                arcade.draw_circle_outline(screen_x, screen_y, 18, arcade.color.WHITE, 2)
             self.player.draw_held_item(layer="back")
             self.player_sprite_list.draw()
             self.player.draw_held_item(layer="front")
+            self.player.draw_attack_animation()
             self.mining_sprite_list.draw()
             self._draw_underground_darkness_overlay()
 
         self.light_layer.draw(ambient_color=self._ambient_color())
 
         self.ui_camera.use()
+        self._draw_player_health()
         self.hotbar.draw()
         self.inventory_ui.draw()
         self.fps_text.y = self.height - 16
         self.fps_text.draw()
 
+        if self.game_over:
+            self._draw_game_over_overlay()
+
     def on_key_press(self, symbol: int, modifiers: int):
         """Reagiert auf Tastatureingaben."""
+        if self.game_over:
+            if symbol == arcade.key.ENTER:
+                self.setup()
+            return
+
         cmd_down = bool(modifiers & arcade.key.MOD_COMMAND)
         if cmd_down and symbol == arcade.key.D:
             self.time_of_day = 0.50
@@ -805,6 +925,9 @@ class GameWindow(arcade.Window):
 
     def on_mouse_press(self, x: float, y: float, button: int, modifiers: int):
         """Verarbeitet Links- und Rechtsklicks für Abbauen, Platzieren und Inventar-Interaktion."""
+        if self.game_over:
+            return
+
         self.mouse_screen_x = x
         self.mouse_screen_y = y
 
@@ -813,7 +936,12 @@ class GameWindow(arcade.Window):
             return
 
         if button == arcade.MOUSE_BUTTON_LEFT:
-            self.left_mouse_down = True
+            enemy = self._enemy_under_mouse(x, y)
+            if enemy is not None:
+                self.left_mouse_down = False
+                self.pending_mine_target = None
+                self.player.start_attack()
+                return
 
             placed_item = self._get_placed_item_from_mouse(x, y)
             if placed_item is not None:
@@ -825,9 +953,12 @@ class GameWindow(arcade.Window):
 
             target = self._get_block_from_mouse(x, y)
             if target is None:
+                self.left_mouse_down = False
                 self.pending_mine_target = None
+                self.player.start_attack()
                 return
 
+            self.left_mouse_down = True
             tile_x, tile_y, _ = target
             self.pending_mine_target = (tile_x, tile_y)
             self.player.start_mining((tile_x, tile_y))

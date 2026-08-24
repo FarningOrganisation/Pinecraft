@@ -65,6 +65,9 @@ class Slime(Enemy):
         if not self.alive:
             return
 
+        if self.stun_timer > 0.0:
+            self.stun_timer = max(0.0, self.stun_timer - delta_time)
+
         if self.jump_cooldown > 0.0:
             self.jump_cooldown -= delta_time
 
@@ -73,9 +76,11 @@ class Slime(Enemy):
             self.change_y = 0.0
 
         self.alerted = self._can_see_player(player)
-        if self.alerted:
+        if self.alerted and self.stun_timer <= 0.0:
             self.move_toward_player(player, delta_time)
             self.set_state("move")
+        elif self.stun_timer > 0.0:
+            self.change_x *= 0.92
         else:
             self.change_x = 0.0
             self.set_state("idle")

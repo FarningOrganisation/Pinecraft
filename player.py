@@ -6,6 +6,7 @@ gezeichnet wird.
 """
 
 from pathlib import Path
+import math
 
 import arcade
 
@@ -43,6 +44,7 @@ class Player(AnimatedSprite):
     def __init__(self, world: World):
         self.is_mining = False
         self.mining_finished = False
+        self.is_attacking = False
 
         animations = {
             "idle": SpriteAnimation(_character_frames("steve_idle.png"), fps=1, loop=True),
@@ -52,6 +54,7 @@ class Player(AnimatedSprite):
                 loop=True,
             ),
             "jumping": SpriteAnimation(_character_frames("steve_jump.png"), fps=1, loop=False),
+            "attacking": SpriteAnimation(_character_frames("steve_idle.png"), fps=1, loop=True),
             "mining": SpriteAnimation(
                 _character_frames("steve_mining01.png", "steve_mining02.png"),
                 fps=5.0, loop=True),
@@ -93,9 +96,15 @@ class Player(AnimatedSprite):
         self.inventory.slots[hotbar_start + 8].item = STONE
         self.inventory.slots[hotbar_start + 8].count = 12
         self.selected_hotbar_slot = 0
-        self.max_health = 10
+        self.max_health = 8
         self.health = self.max_health
         self.held_item_size = 16
+        self.attack_damage = 1
+        self.attack_hitbox_width = 56.0
+        self.attack_hitbox_height = 34.0
+        self.attack_hitbox_offset = 22.0
+        self.attack_hit_targets: set[int] = set()
+        self._fall_reference_y = self.center_y
         # Dummy-Positionen pro Zustand/Frame in Bildkoordinaten.
         # Format je Eintrag:
         # {
@@ -115,6 +124,7 @@ class Player(AnimatedSprite):
                 {"x": 7, "y": 36, "rotation": 0, "scale": 1.0, "z_offset": 0},
             ],
             "jumping": [{"x": 4, "y": 3, "rotation": 0, "scale": 1.0, "z_offset": 0}],
+            "attacking": [{"x": 41, "y": 37, "rotation": 0, "scale": 1.0, "z_offset": 0}],
             "mining": [
                 {"x": 41, "y": 37, "rotation": 0, "scale": 1.0, "z_offset": 0},
                 {"x": 44, "y": 34, "rotation": 45, "scale": 1.0, "z_offset": 0},
@@ -142,17 +152,16 @@ class Player(AnimatedSprite):
         self.pending_item_drops: list[tuple[int, int, int]] = []
         self.world_dirty = False
         self.dirty_chunk_xs: set[int] = set()
-        self.mining_animation = SpriteAnimation(
-            [
-                arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack1.png"),
-                arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack2.png"),
-                arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack3.png"),
-                arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack4.png"),
-                arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack5.png"),
-            ],
-            fps=5.0 / self.BASE_MINING_DURATION,
-            loop=False,
-        )
+        self._crack_textures = [
+            arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack1.png"),
+            arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack2.png"),
+            arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack3.png"),
+            arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack4.png"),
+            arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack5.png"),
+        ]
+        self.attack_animation = SpriteAnimation(self._crack_textures, fps=5.0 / 0.35, loop=False)
+        self.attack_animation.visible = False
+        self.mining_animation = SpriteAnimation(self._crack_textures, fps=5.0 / self.BASE_MINING_DURATION, loop=False)
 
         if self.world is not None:
             self.center_y = self.world.get_ground_top(int(self.center_x)) + self.height / 2 + 4
@@ -163,6 +172,9 @@ class Player(AnimatedSprite):
             return
 
         if self.is_mining and state_name != "mining":
+            return
+
+        if self.is_attacking and state_name != "attacking":
             return
 
         if self.current_state == state_name and self.current_animation is self.animations[state_name]:
@@ -176,6 +188,79 @@ class Player(AnimatedSprite):
         duration = max(0.01, float(duration_seconds))
         frame_count = max(1, len(self.mining_animation.frames))
         self.mining_animation.fps = frame_count / duration
+
+    def _sync_attack_animation_position(self):
+        """Platziert den Attack-Overlay direkt vor dem Spieler."""
+        direction = 1 if self.facing_right else -1
+        self.attack_animation.center_x = self.center_x + direction * (self.width * 0.5 + self.attack_hitbox_offset)
+        self.attack_animation.center_y = self.center_y + self.height * 0.12
+
+    def draw_attack_animation(self):
+        """Zeichnet die aktuelle Attack-Animation am Spieler."""
+        if not self.is_attacking or self.attack_animation.texture is None:
+            return
+
+        self._sync_attack_animation_position()
+        texture = self.attack_animation.texture
+        texture_width = texture.width * 0.85
+        texture_height = texture.height * 0.85
+        rect = arcade.rect.XYWH(
+            self.attack_animation.center_x,
+            self.attack_animation.center_y,
+            texture_width,
+            texture_height,
+        )
+        arcade.draw_texture_rect(texture, rect, alpha=255)
+
+    def get_attack_hitbox(self) -> tuple[float, float, float, float]:
+        """Liefert die aktuelle Angriffs-Hitbox als (left, right, bottom, top)."""
+        direction = 1 if self.facing_right else -1
+        center_x = self.center_x + direction * (self.width * 0.5 + self.attack_hitbox_offset)
+        center_y = self.center_y + self.height * 0.10
+        left = center_x - self.attack_hitbox_width / 2
+        right = center_x + self.attack_hitbox_width / 2
+        bottom = center_y - self.attack_hitbox_height / 2
+        top = center_y + self.attack_hitbox_height / 2
+        return left, right, bottom, top
+
+    def start_attack(self):
+        """Startet einen Nahkampfangriff als einmalige Animation."""
+        if self.is_mining:
+            self.cancel_mining()
+
+        if self.is_attacking:
+            return
+
+        self.is_attacking = True
+        self.attack_hit_targets.clear()
+        self.attack_animation.reset()
+        self.attack_animation.visible = True
+        self._sync_attack_animation_position()
+        self.set_state("attacking")
+
+    def finish_attack(self):
+        """Beendet die Attack-Animation und setzt den Zustand zurück."""
+        self.is_attacking = False
+        self.attack_animation.visible = False
+        self.attack_animation.reset()
+        self.attack_hit_targets.clear()
+
+    def apply_fall_damage(self):
+        """Wendet Fallschaden nach der Landung an."""
+        fall_distance = max(0.0, self._fall_reference_y - self.center_y)
+        fall_blocks = fall_distance / TILE_SIZE
+        if fall_blocks <= 8.0:
+            self._fall_reference_y = self.center_y
+            return 0
+
+        damage = math.ceil((fall_blocks - 8.0) / 3.0)
+        self.health = max(0, self.health - damage)
+        self._fall_reference_y = self.center_y
+        return damage
+
+    def begin_fall_tracking(self):
+        """Merkt sich die Höhe, von der ein Fall begonnen hat."""
+        self._fall_reference_y = self.center_y
 
     @property
     def selected_block(self):
@@ -515,6 +600,12 @@ class Player(AnimatedSprite):
                 self.release_mining_result(self.world)
                 self.world_dirty = self.world is not None
 
+        if self.is_attacking:
+            self.attack_animation.update(delta_time)
+            self._sync_attack_animation_position()
+            if self.attack_animation.has_finished:
+                self.finish_attack()
+
         if self.change_x < 0:
             self.facing_right = False
         elif self.change_x > 0:
@@ -522,6 +613,8 @@ class Player(AnimatedSprite):
 
         if self.is_mining:
             self.set_state("mining")
+        elif self.is_attacking:
+            self.set_state("attacking")
         elif not self.on_ground and self.change_y > 10:
             self.set_state("jumping")
         elif abs(self.change_x) > 0.1:
@@ -533,7 +626,7 @@ class Player(AnimatedSprite):
 
     def move_left(self):
         """Bewegt den Spieler nach links."""
-        if self.is_mining:
+        if self.is_mining or self.is_attacking:
             return
         self.change_x = -PLAYER_SPEED
         self.facing_right = False
@@ -542,7 +635,7 @@ class Player(AnimatedSprite):
 
     def move_right(self):
         """Bewegt den Spieler nach rechts."""
-        if self.is_mining:
+        if self.is_mining or self.is_attacking:
             return
         self.change_x = PLAYER_SPEED
         self.facing_right = True
@@ -551,7 +644,7 @@ class Player(AnimatedSprite):
 
     def stop_horizontal(self):
         """Stoppt die seitliche Bewegung."""
-        if self.is_mining:
+        if self.is_mining or self.is_attacking:
             return
         self.change_x = 0.0
         if self.on_ground:
@@ -559,7 +652,7 @@ class Player(AnimatedSprite):
 
     def jump(self):
         """Lässt den Spieler springen, wenn er am Boden steht."""
-        if self.is_mining:
+        if self.is_mining or self.is_attacking:
             return
         if self.on_ground:
             self.change_y = PLAYER_JUMP_SPEED
@@ -577,6 +670,9 @@ class Player(AnimatedSprite):
                 self.release_mining_result(self.world)
             else:
                 return
+
+        if self.is_attacking:
+            return
 
         block_id = self.world.get_block(*block_pos)
         if not is_block_breakable(block_id):

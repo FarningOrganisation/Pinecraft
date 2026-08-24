@@ -40,6 +40,8 @@ class Enemy(AnimatedSprite):
         self.on_ground = False
         self.alerted = False
         self.contact_cooldown = 0.0
+        self.stun_timer = 0.0
+        self.aggro_timer = 0.0
         self.alive = True
 
         self.width = 28
@@ -71,7 +73,7 @@ class Enemy(AnimatedSprite):
         dx = player.center_x - self.center_x
         dy = player.center_y - self.center_y
         distance = math.hypot(dx, dy)
-        return distance <= self.activate_range
+        return distance <= self.activate_range or self.aggro_timer > 0.0
 
     def player_direction(self, player) -> int:
         """Returns -1 or 1 based on the player's x-position relative to this enemy."""
@@ -98,9 +100,21 @@ class Enemy(AnimatedSprite):
         if self.center_y < 0:
             self.center_y = 0.0
 
+    def apply_knockback(self, knockback_x: float, knockback_y: float, stun_duration: float = 0.2):
+        """Wendet Rückstoß und einen kurzen Stun an."""
+        self.change_x = knockback_x
+        self.change_y = max(self.change_y, knockback_y)
+        self.stun_timer = max(self.stun_timer, stun_duration)
+        self.aggro_timer = max(self.aggro_timer, 2.0)
+        self.on_ground = False
+
+    def on_death(self):
+        """Hook for subclasses when the enemy dies."""
+        return None
+
     def handle_contact_damage(self, player, delta_time: float) -> None:
         """Damages the player on direct contact with a short cooldown."""
-        if player is None or not self.alive:
+        if player is None or not self.alive or self.stun_timer > 0.0:
             return
 
         self.contact_cooldown = max(0.0, self.contact_cooldown - delta_time)
@@ -119,6 +133,12 @@ class Enemy(AnimatedSprite):
         if not self.alive:
             return
 
+        if self.stun_timer > 0.0:
+            self.stun_timer = max(0.0, self.stun_timer - delta_time)
+
+        if self.aggro_timer > 0.0:
+            self.aggro_timer = max(0.0, self.aggro_timer - delta_time)
+
         self.alerted = self._can_see_player(player)
         self.handle_contact_damage(player, delta_time)
         super().update(delta_time)
@@ -132,5 +152,8 @@ class Enemy(AnimatedSprite):
         if self.health <= 0:
             self.health = 0
             self.alive = False
+            self.on_death()
             return True
+
+        self.aggro_timer = max(self.aggro_timer, 2.5)
         return False
