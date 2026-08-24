@@ -437,7 +437,7 @@ class Player(AnimatedSprite):
         return center_x + flame_rot_x, center_y + flame_rot_y
 
     def can_place_block(self, world, tile_x: int, tile_y: int) -> bool:
-        """Prüft, ob an der angegebenen Position ein Block platziert werden kann."""
+        """Prüft, ob an der angegebenen Position ein Block oder Item platziert werden kann."""
         if world is None or world.get_block(tile_x, tile_y) != AIR:
             return False
         if world.get_placed_item(tile_x, tile_y) is not None:
@@ -448,12 +448,12 @@ class Player(AnimatedSprite):
         if place_target is None or selected_entry is None or self.inventory.get_item_count(selected_entry) <= 0:
             return False
 
-        target_kind, target_id = place_target
-
-        if target_kind == "item" and target_id == TORCH:
-            support_id = world.get_block(tile_x, tile_y - 1)
-            if support_id == AIR or not is_block_solid(support_id):
-                return False
+        support_y = tile_y - 1
+        if support_y < 0:
+            return False
+        support_id = world.get_block(tile_x, support_y)
+        if support_id == AIR or not is_block_solid(support_id):
+            return False
 
         block_center_x, block_center_y = world.to_world_position(tile_x, tile_y)
         block_left = block_center_x - TILE_SIZE / 2

@@ -578,6 +578,21 @@ class GameWindow(arcade.Window):
 
         return tile_x, tile_y, block_id
 
+    def _get_placed_item_from_mouse(self, screen_x: float, screen_y: float):
+        """Gibt ein platziertes Item unter der Maus zurück oder None."""
+        world_x, world_y = self._screen_to_world(screen_x, screen_y)
+        tile_x, tile_y = self.world.to_block_position(world_x, world_y)
+        item_id = self.world.get_placed_item(tile_x, tile_y)
+        if item_id is None:
+            return None
+
+        item_center_x, item_center_y = self.world.to_world_position(tile_x, tile_y)
+        distance = ((item_center_x - self.player.center_x) ** 2 + (item_center_y - self.player.center_y) ** 2) ** 0.5
+        if distance > self.break_range:
+            return None
+
+        return tile_x, tile_y, item_id
+
     def on_draw(self):
         """Zeichnet die Szene und die Minecraft-artige Hotbar."""
         self.clear((0, 0, 0, 255))
@@ -673,6 +688,15 @@ class GameWindow(arcade.Window):
 
         if button == arcade.MOUSE_BUTTON_LEFT:
             self.left_mouse_down = True
+
+            placed_item = self._get_placed_item_from_mouse(x, y)
+            if placed_item is not None:
+                tile_x, tile_y, item_id = placed_item
+                removed_item = self.world.remove_placed_item(tile_x, tile_y)
+                if removed_item is not None:
+                    self.player.inventory.add_item(removed_item, 1)
+                return
+
             target = self._get_block_from_mouse(x, y)
             if target is None:
                 self.pending_mine_target = None
