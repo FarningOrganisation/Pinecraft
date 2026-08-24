@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import arcade
+from paths import textures_dir
 
 ITEM_ID_START = 1024
 
@@ -33,6 +34,7 @@ ITEMS = {
         "max_stack": 1,
         "attack_damage": 2,
     },
+    # TODO_STUDENT (⭐⭐⭐): Weitere Tools wie Iron/Gold/Diamond Pickaxe hier anlegen.
     CHARCOAL: {
         "item_id": CHARCOAL,
         "name": "Charcoal",
@@ -78,7 +80,7 @@ ITEMS = {
     },
 }
 
-TEXTURE_ROOT = Path(__file__).resolve().parent / "assets" / "textures"
+TEXTURE_ROOT = textures_dir()
 
 
 def _item_texture_path(item_definition: dict) -> Path:

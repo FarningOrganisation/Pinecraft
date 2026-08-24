@@ -1,9 +1,9 @@
 """Block-Definitionen und Texturen für Pinecraft."""
 
 import math
-from pathlib import Path
 
 import arcade
+from paths import textures_dir
 
 AIR = 0
 GRASS = 1
@@ -26,6 +26,7 @@ BLOCKS = {
     DIRT: {"name": "Dirt", "texture": "dirt.png", "solid": True},
     STONE: {"name": "Stone", "texture": "stone.png", "solid": True, "hardness": 2},
     SAND: {"name": "Sand", "texture": "sand.png", "solid": True},
+    # TODO_STUDENT (⭐⭐): Sand erweitern, z. B. mit Fallverhalten in der Physik.
     BEDROCK: {"name": "Bedrock", "texture": "bedrock.png", "solid": True, "hardness": float("inf")},
     OAK: {"name": "Oak", "texture": "oak.png", "solid": True, "skylight_surface": False},
     LEAVES: {
@@ -103,7 +104,7 @@ def is_block_skylight_surface(block_id: int) -> bool:
         return True
     return bool(block_definition.get("skylight_surface", True))
 
-TEXTURE_DIR = Path(__file__).resolve().parent / "assets" / "textures" / "blocks"
+TEXTURE_DIR = textures_dir("blocks")
 BLOCK_TEXTURES = {
     block_id: arcade.load_texture(TEXTURE_DIR / info["texture"])
     for block_id, info in BLOCKS.items()

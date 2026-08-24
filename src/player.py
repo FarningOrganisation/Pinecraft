@@ -5,13 +5,12 @@ Animationshierarchie, während die tatsächliche SpriteList im Spiel-Fenster
 gezeichnet wird.
 """
 
-from pathlib import Path
 import math
 
 import arcade
 
 from animated_sprite import AnimatedSprite
-from blocks import AIR, DIRT, GRASS, STONE, get_block_drop_id, get_block_hardness, is_block_breakable, is_block_solid
+from blocks import AIR, DIRT, GRASS, OAK, STONE, get_block_drop_id, get_block_hardness, is_block_breakable, is_block_solid
 from items import PICKAXE, STONE_SWORD, TORCH
 from inventory import Inventory
 from settings import (
@@ -26,13 +25,14 @@ from settings import (
     TARGET_FPS,
     TILE_SIZE,
 )
+from paths import textures_dir
 from sprite_animation import SpriteAnimation
 from world import World, world_to_chunk_and_local
 
 
 def _character_frames(*file_names):
     """Lädt eine Liste von Charakter-Texturen aus dem assets-Verzeichnis."""
-    base_dir = Path(__file__).resolve().parent / "assets" / "textures" / "characters"
+    base_dir = textures_dir("characters")
     return [arcade.load_texture(base_dir / name) for name in file_names]
 
 
@@ -159,12 +159,13 @@ class Player(AnimatedSprite):
         self.world_dirty = False
         self.dirty_chunk_xs: set[int] = set()
         self._attack_textures = _character_frames("steve_mining01.png", "steve_mining02.png")
+        crack_texture_dir = textures_dir("cracks")
         self._crack_textures = [
-            arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack1.png"),
-            arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack2.png"),
-            arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack3.png"),
-            arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack4.png"),
-            arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack5.png"),
+            arcade.load_texture(crack_texture_dir / "crack1.png"),
+            arcade.load_texture(crack_texture_dir / "crack2.png"),
+            arcade.load_texture(crack_texture_dir / "crack3.png"),
+            arcade.load_texture(crack_texture_dir / "crack4.png"),
+            arcade.load_texture(crack_texture_dir / "crack5.png"),
         ]
         self.attack_animation = SpriteAnimation(self._attack_textures, fps=5.0 / 0.35, loop=False)
         self.attack_animation.visible = False
@@ -736,6 +737,7 @@ class Player(AnimatedSprite):
             return None
 
         world.break_block(tile_x, tile_y)
+        self._maybe_spawn_tree_seed_drop(block_id, tile_x, tile_y)
         drop_id = get_block_drop_id(block_id)
         if drop_id is None:
             drop_id = block_id
@@ -748,6 +750,15 @@ class Player(AnimatedSprite):
         self.mining_animation.reset()
         self.world_dirty = True
         return block_id
+
+    def _maybe_spawn_tree_seed_drop(self, mined_block_id: int, tile_x: int, tile_y: int):
+        """Optionaler Zusatz-Drop bei Baumblöcken (Challenge-Stelle)."""
+        # TODO_STUDENT (⭐⭐):
+        # - Neues Item "Tree Seed" in items.py anlegen
+        # - Seltene Chance prüfen (z. B. 5 %)
+        # - Bei Treffer in self.pending_item_drops aufnehmen
+        if mined_block_id == OAK:
+            return
 
     def consume_pending_item_drops(self) -> list[tuple[int, int, int]]:
         """Liefert und leert alle wartenden Drop-Spawn-Events."""

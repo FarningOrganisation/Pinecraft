@@ -1,13 +1,13 @@
 """Lighting and sky rendering helpers for the game."""
 
 import math
-from pathlib import Path
 
 import arcade
 from arcade.future.light import Light
 from arcade.gl import geometry as gl_geometry
 
 from blocks import AIR, get_block_light_opacity, is_block_skylight_surface
+from paths import textures_dir
 from settings import TILE_SIZE, WORLD_HEIGHT
 
 
@@ -83,7 +83,7 @@ class LightingSystem:
 
         self.sun_sprite: arcade.Sprite | None = None
         self.moon_sprite: arcade.Sprite | None = None
-        sky_textures_dir = Path(__file__).resolve().parent / "assets" / "textures" / "sky"
+        sky_textures_dir = textures_dir("sky")
 
         sun_path = sky_textures_dir / "sun.png"
         if sun_path.exists():

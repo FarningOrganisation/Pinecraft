@@ -117,4 +117,14 @@ class AABBPhysics:
             player.on_ground = True
             player.change_y = 0.0
 
+        self._update_falling_sand_stub()
+
         return player.on_ground
+
+    def _update_falling_sand_stub(self):
+        """Hook für fallenden Sand als Schüleraufgabe."""
+        # TODO_STUDENT (⭐⭐):
+        # - Suche Sandblöcke mit Luft darunter
+        # - Lass sie pro Tick nach unten rutschen
+        # - Starte klein: nur nahe am Spieler prüfen
+        return

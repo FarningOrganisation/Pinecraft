@@ -5,14 +5,16 @@ from __future__ import annotations
 import math
 
 import arcade
+from paths import textures_dir
 
-from enemy import Enemy
-from enemy_physics import update_enemy_physics
+from enemies.enemy import Enemy
+from enemies.enemy_physics import update_enemy_physics
 from sprite_animation import SpriteAnimation
 
 
 class Slime(Enemy):
     """A simple jumping slime that chases the player."""
+    # TODO_STUDENT (⭐⭐⭐): BabySlime einfuehren und beim Tod grosser Slimes spawnen.
 
     def __init__(self, world, x: float, y: float, health: int = 3):
         super().__init__(
@@ -28,8 +30,9 @@ class Slime(Enemy):
         self.jump_speed = 370.0
         self.jump_cooldown = 0.4
 
-        idle_texture = arcade.load_texture("assets/textures/enemies/slimeBlue.png")
-        move_texture = arcade.load_texture("assets/textures/enemies/slimeBlue_move.png")
+        enemy_texture_dir = textures_dir("enemies")
+        idle_texture = arcade.load_texture(enemy_texture_dir / "slimeBlue.png")
+        move_texture = arcade.load_texture(enemy_texture_dir / "slimeBlue_move.png")
 
         self.animations = {
             "idle": SpriteAnimation([idle_texture, move_texture], fps=1.5, loop=True),

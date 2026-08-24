@@ -27,6 +27,7 @@ def _vertical_pair_variants(top_item: int, bottom_item: int) -> list[list[list[i
     return variants
 
 CRAFTING_RECIPES = {
+    # TODO_STUDENT (⭐): Spiel starten und dieses Pickaxe-Rezept nachvollziehen.
     PICKAXE: [
         {
             "pattern": [
@@ -49,4 +50,6 @@ CRAFTING_RECIPES = {
         {"pattern": pattern, "count": 1}
         for pattern in _vertical_pair_variants(CHARCOAL, STICK)
     ],
+    # TODO_STUDENT (⭐⭐): Rezept fuer Stone Sword als 3x3-Muster ergaenzen.
+    # TODO_STUDENT (⭐⭐⭐): Rezepte fuer Iron/Gold/Diamond Pickaxe ergaenzen.
 }

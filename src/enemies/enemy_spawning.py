@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TypeVar
 
-from enemy import Enemy
+from enemies.enemy import Enemy
 
 EnemyType = TypeVar("EnemyType", bound=Enemy)
 

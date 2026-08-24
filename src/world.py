@@ -11,6 +11,7 @@ import math
 from dataclasses import dataclass, field
 
 from blocks import AIR, is_block_solid
+from settings import WORLD_SEED
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
 
 
@@ -51,8 +52,8 @@ class Chunk:
 class World:
     """Objekt, das den aktuellen Zustand der Welt verwaltet."""
 
-    def __init__(self, seed: int = 1337, load_radius: int = 3, unload_radius: int = 5, generator=None):
-        self.seed = seed
+    def __init__(self, seed: int | None = None, load_radius: int = 3, unload_radius: int = 5, generator=None):
+        self.seed = WORLD_SEED if seed is None else seed
         self.chunks: dict[int, Chunk] = {}
         self.placed_items: dict[tuple[int, int], int] = {}
         self.saved_chunk_blocks: dict[int, list[list[int]]] = {}
@@ -65,7 +66,7 @@ class World:
         if generator is None:
             from world_generation import WorldGenerator
 
-            self.generator = WorldGenerator(seed=seed)
+            self.generator = WorldGenerator(seed=self.seed)
         else:
             self.generator = generator
 
