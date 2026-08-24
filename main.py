@@ -7,6 +7,7 @@ Chunk-Struktur aufgebaut wird.
 """
 
 import math
+import random
 from pathlib import Path
 
 import arcade
@@ -16,6 +17,8 @@ from arcade.future.light import Light, LightLayer
 from blocks import AIR, BLOCK_TEXTURES, get_block_light_opacity, is_block_skylight_surface
 from dropped_item import DroppedItem
 from hotbar import Hotbar
+from slime import Slime
+from enemy_spawning import spawn_enemy_at
 from inventory_ui import InventoryUI
 from items import ITEM_TEXTURES, TORCH
 from lighting import LightingSystem
@@ -50,6 +53,10 @@ class GameWindow(arcade.Window):
         self.mining_sprite_list.append(self.player.mining_animation)
         self.dropped_item_sprite_list = arcade.SpriteList()
         self.dropped_items: list[DroppedItem] = []
+        self.enemy_sprite_list = arcade.SpriteList()
+        self.enemies: list[Slime] = []
+        self.enemy_spawn_timer = 0.0
+        self.max_active_enemies = 5
         self.hotbar = Hotbar(self.player)
         self.inventory_ui = InventoryUI(self.player, SCREEN_WIDTH, SCREEN_HEIGHT)
         self.chunk_sprite_lists: dict[int, arcade.SpriteList] = {}
@@ -450,12 +457,16 @@ class GameWindow(arcade.Window):
         self.player.change_x = 0.0
         self.player.change_y = 0.0
         self.player.on_ground = True
+        self.player.health = max(1, getattr(self.player, "max_health", 10))
         self.player_sprite_list = arcade.SpriteList()
         self.player_sprite_list.append(self.player)
         self.mining_sprite_list = arcade.SpriteList()
         self.mining_sprite_list.append(self.player.mining_animation)
         self.dropped_item_sprite_list = arcade.SpriteList()
         self.dropped_items = []
+        self.enemy_sprite_list = arcade.SpriteList()
+        self.enemies = []
+        self.enemy_spawn_timer = 0.0
         self.hotbar = Hotbar(self.player)
         self.inventory_ui = InventoryUI(self.player, SCREEN_WIDTH, SCREEN_HEIGHT)
         self.physics = AABBPhysics(self.world)
@@ -472,6 +483,22 @@ class GameWindow(arcade.Window):
         self._rebuild_world_sprites()
         self.light_layer.resize(self.width, self.height)
         self._sync_torch_lights()
+
+    def spawn_enemy(self, enemy_class, x: float, y: float, **enemy_kwargs):
+        """Spawns any enemy class at the requested world position."""
+        if len(self.enemies) >= self.max_active_enemies:
+            print("[enemy-spawn] skipped: max enemy count reached")
+            return None
+
+        return spawn_enemy_at(
+            self.world,
+            enemy_class,
+            self.enemies,
+            self.enemy_sprite_list,
+            x=x,
+            y=y,
+            **enemy_kwargs,
+        )
 
     def on_update(self, delta_time: float):
         """Wird regelmäßig pro Frame aufgerufen."""
@@ -556,6 +583,7 @@ class GameWindow(arcade.Window):
             self._sync_chunk_sprite_cache(loaded_chunks, unloaded_chunks)
 
         self._sync_torch_lights()
+        self._update_enemies(delta_time)
 
     def _screen_to_world(self, screen_x: float, screen_y: float):
         """Konvertiert Bildschirmkoordinaten in Weltkoordinaten."""
@@ -593,6 +621,94 @@ class GameWindow(arcade.Window):
 
         return tile_x, tile_y, item_id
 
+    def _can_spawn_enemy_at(self, world_x: float, world_y: float, ignore_player_distance: bool = False) -> bool:
+        """Prüft, ob an dieser Position ein Slime zuverlässig spawnen darf."""
+        tile_x = int(world_x // TILE_SIZE)
+        tile_y = int(world_y // TILE_SIZE)
+        if tile_y < 1 or tile_y >= 220:
+            return False
+        if self.world.get_block(tile_x, tile_y, generate_if_missing=False) != 0:
+            return False
+        if self.world.get_block(tile_x, tile_y - 1, generate_if_missing=False) == 0:
+            return False
+
+        if not ignore_player_distance and abs(world_x - self.player.center_x) < 600.0:
+            return False
+
+        for (torch_x, torch_y), item_id in self.world.placed_items.items():
+            if item_id != TORCH:
+                continue
+            light_x = (torch_x + 0.5) * TILE_SIZE
+            light_y = (torch_y + 1.0) * TILE_SIZE
+            if math.hypot(world_x - light_x, world_y - light_y) < 180.0:
+                return False
+
+        if self._day_factor() > 0.45:
+            world_surface = self.world.get_surface_height(tile_x)
+            if world_surface >= tile_y - 1:
+                return False
+        return True
+
+    def _spawn_test_slime(self):
+        """Spawns exactly one test slime next to the player on demand."""
+        self.spawn_enemy(Slime, self.player.center_x + 96.0, self.player.center_y + 32.0)
+
+        slime = self.enemies[-1]
+        spawn_tile_x = int(slime.center_x // TILE_SIZE)
+        ground_y = self.world.get_ground_top(spawn_tile_x)
+        slime.center_y = ground_y + slime.height / 2
+        slime.on_ground = True
+        slime.change_x = 0.0
+        slime.change_y = 0.0
+        slime.jump_cooldown = 0.0
+        print(
+            f"[enemy-spawn-ground] {slime.__class__.__name__} "
+            f"x={slime.center_x:.1f} y={slime.center_y:.1f} "
+            f"ground_y={ground_y:.1f}"
+        )
+
+    def _spawn_enemy_if_needed(self):
+        """Spawns normal roaming enemies if the timer allows it."""
+        if len(self.enemies) >= self.max_active_enemies:
+            return
+        if self.enemy_spawn_timer > 0.0:
+            return
+
+        for _ in range(18):
+            angle = random.uniform(0.0, 2.0 * math.pi)
+            distance = random.uniform(700.0, 1800.0)
+            spawn_x = self.player.center_x + math.cos(angle) * distance
+            spawn_tile_x = int(spawn_x // TILE_SIZE)
+            ground_y = self.world.get_ground_top(spawn_tile_x)
+            spawn_y = ground_y + 14.0
+
+            if not self._can_spawn_enemy_at(spawn_x, spawn_y):
+                continue
+
+            slime = Slime(self.world, x=spawn_x, y=spawn_y)
+            self.enemies.append(slime)
+            self.enemy_sprite_list.append(slime)
+            self.enemy_spawn_timer = 3.0
+            return
+
+    def _update_enemies(self, delta_time: float):
+        """Aktualisiert alle Feinde und entfernt tote Feinde aus der Liste."""
+        alive_enemies: list[Slime] = []
+        for enemy in self.enemies:
+            if not getattr(enemy, "alive", True):
+                self.enemy_sprite_list.remove(enemy)
+                continue
+
+            enemy.update_ai(delta_time, self.player)
+            if enemy.health <= 0 or enemy.center_y < -64:
+                self.enemy_sprite_list.remove(enemy)
+                continue
+            alive_enemies.append(enemy)
+
+        self.enemies = alive_enemies
+        self.enemy_spawn_timer = max(0.0, self.enemy_spawn_timer - delta_time)
+        self._spawn_enemy_if_needed()
+
     def on_draw(self):
         """Zeichnet die Szene und die Minecraft-artige Hotbar."""
         self.clear((0, 0, 0, 255))
@@ -613,6 +729,12 @@ class GameWindow(arcade.Window):
                     chunk_sprites.draw()
             self._draw_placed_world_items()
             self.dropped_item_sprite_list.draw()
+            self.enemy_sprite_list.draw()
+            for enemy in self.enemies:
+                screen_x = enemy.center_x - self.camera.position[0] + self.width / 2
+                screen_y = enemy.center_y - self.camera.position[1] + self.height / 2
+                arcade.draw_circle_filled(screen_x, screen_y, 18, (60, 220, 255, 150))
+                arcade.draw_circle_outline(screen_x, screen_y, 18, arcade.color.WHITE, 2)
             self.player.draw_held_item(layer="back")
             self.player_sprite_list.draw()
             self.player.draw_held_item(layer="front")
@@ -644,6 +766,10 @@ class GameWindow(arcade.Window):
 
         if cmd_down and symbol == arcade.key.N:
             self.time_of_day = 0.00
+            return
+
+        if symbol == arcade.key.P:
+            self._spawn_test_slime()
             return
 
         if 49 <= symbol <= 57:

@@ -93,6 +93,8 @@ class Player(AnimatedSprite):
         self.inventory.slots[hotbar_start + 8].item = STONE
         self.inventory.slots[hotbar_start + 8].count = 12
         self.selected_hotbar_slot = 0
+        self.max_health = 10
+        self.health = self.max_health
         self.held_item_size = 16
         # Dummy-Positionen pro Zustand/Frame in Bildkoordinaten.
         # Format je Eintrag:
