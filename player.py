@@ -12,7 +12,7 @@ import arcade
 
 from animated_sprite import AnimatedSprite
 from blocks import AIR, DIRT, GRASS, STONE, get_block_drop_id, get_block_hardness, is_block_breakable, is_block_solid
-from items import PICKAXE, TORCH
+from items import PICKAXE, STONE_SWORD, TORCH
 from inventory import Inventory
 from settings import (
     GROUND_Y,
@@ -81,8 +81,8 @@ class Player(AnimatedSprite):
         self.inventory.slots[hotbar_start + 0].count = 1
         self.inventory.slots[hotbar_start + 1].item = TORCH
         self.inventory.slots[hotbar_start + 1].count = 12
-        self.inventory.slots[hotbar_start + 2].item = STONE
-        self.inventory.slots[hotbar_start + 2].count = 12
+        self.inventory.slots[hotbar_start + 2].item = STONE_SWORD
+        self.inventory.slots[hotbar_start + 2].count = 1
         self.inventory.slots[hotbar_start + 3].item = GRASS
         self.inventory.slots[hotbar_start + 3].count = 12
         self.inventory.slots[hotbar_start + 4].item = DIRT
@@ -99,7 +99,6 @@ class Player(AnimatedSprite):
         self.max_health = 8
         self.health = self.max_health
         self.held_item_size = 16
-        self.attack_damage = 1
         self.attack_hitbox_width = 56.0
         self.attack_hitbox_height = 34.0
         self.attack_hitbox_offset = 22.0
@@ -124,7 +123,10 @@ class Player(AnimatedSprite):
                 {"x": 7, "y": 36, "rotation": 0, "scale": 1.0, "z_offset": 0},
             ],
             "jumping": [{"x": 4, "y": 3, "rotation": 0, "scale": 1.0, "z_offset": 0}],
-            "attacking": [{"x": 41, "y": 37, "rotation": 0, "scale": 1.0, "z_offset": 0}],
+            "attacking": [
+                {"x": 41, "y": 37, "rotation": 0, "scale": 1.0, "z_offset": 0},
+                {"x": 44, "y": 34, "rotation": 45, "scale": 1.0, "z_offset": 0},
+            ],
             "mining": [
                 {"x": 41, "y": 37, "rotation": 0, "scale": 1.0, "z_offset": 0},
                 {"x": 44, "y": 34, "rotation": 45, "scale": 1.0, "z_offset": 0},
@@ -152,6 +154,7 @@ class Player(AnimatedSprite):
         self.pending_item_drops: list[tuple[int, int, int]] = []
         self.world_dirty = False
         self.dirty_chunk_xs: set[int] = set()
+        self._attack_textures = _character_frames("steve_mining01.png", "steve_mining02.png")
         self._crack_textures = [
             arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack1.png"),
             arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack2.png"),
@@ -159,7 +162,7 @@ class Player(AnimatedSprite):
             arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack4.png"),
             arcade.load_texture(Path(__file__).resolve().parent / "assets" / "textures" / "cracks" / "crack5.png"),
         ]
-        self.attack_animation = SpriteAnimation(self._crack_textures, fps=5.0 / 0.35, loop=False)
+        self.attack_animation = SpriteAnimation(self._attack_textures, fps=5.0 / 0.35, loop=False)
         self.attack_animation.visible = False
         self.mining_animation = SpriteAnimation(self._crack_textures, fps=5.0 / self.BASE_MINING_DURATION, loop=False)
 
@@ -223,15 +226,30 @@ class Player(AnimatedSprite):
         top = center_y + self.attack_hitbox_height / 2
         return left, right, bottom, top
 
+    @property
+    def attack_damage(self) -> int:
+        """Liefert den aktuellen Angriffsschaden basierend auf dem ausgerüsteten Tool."""
+        held_entry = self._selected_held_entry()
+        if held_entry is None:
+            return 1
+
+        item_type = self.inventory.get_item_type(held_entry)
+        if item_type != "tool":
+            return 1
+
+        return self.inventory.get_attack_damage(held_entry)
+
     def start_attack(self):
         """Startet einen Nahkampfangriff als einmalige Animation."""
         if self.is_mining:
             self.cancel_mining()
 
         if self.is_attacking:
-            return
+            self.attack_animation.reset()
+            self.attack_hit_targets.clear()
+        else:
+            self.is_attacking = True
 
-        self.is_attacking = True
         self.attack_hit_targets.clear()
         self.attack_animation.reset()
         self.attack_animation.visible = True

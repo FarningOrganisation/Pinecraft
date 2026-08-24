@@ -14,6 +14,7 @@ GOLD_INGOT = ITEM_ID_START + 3
 DIAMOND = ITEM_ID_START + 4
 STICK = ITEM_ID_START + 5
 TORCH = ITEM_ID_START + 6
+STONE_SWORD = ITEM_ID_START + 7
 
 ITEMS = {
     PICKAXE: {
@@ -23,6 +24,14 @@ ITEMS = {
         "item_type": "tool",  # consumable, tool, material
         "max_stack": 1,
         "mining_speed": 2,
+    },
+    STONE_SWORD: {
+        "item_id": STONE_SWORD,
+        "name": "Stone Sword",
+        "texture": "stone_sword.png",
+        "item_type": "tool",
+        "max_stack": 1,
+        "attack_damage": 2,
     },
     CHARCOAL: {
         "item_id": CHARCOAL,

@@ -979,7 +979,6 @@ class GameWindow(arcade.Window):
         if button == arcade.MOUSE_BUTTON_LEFT:
             self.left_mouse_down = False
             self.pending_mine_target = None
-            self.player.cancel_mining()
 
     def on_mouse_motion(self, x: float, y: float, dx: float, dy: float):
         """Merkt die letzte Mausposition für Hold-to-Mine."""

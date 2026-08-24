@@ -127,6 +127,21 @@ class Inventory:
         return max(0.01, speed_value)
 
     @staticmethod
+    def get_attack_damage(entry_id):
+        """Liefert den Angriffsbonus eines Eintrags (Default: 1)."""
+        if not Inventory.is_item_id(entry_id):
+            return 1
+        item_definition = ITEMS.get(entry_id)
+        if item_definition is None:
+            return 1
+        damage = item_definition.get("attack_damage", 1)
+        try:
+            damage_value = int(damage)
+        except (TypeError, ValueError):
+            return 1
+        return max(1, damage_value)
+
+    @staticmethod
     def get_texture(entry_id):
         """Liefert die passende Texture für Block oder Item."""
         if entry_id is None:
