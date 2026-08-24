@@ -90,8 +90,8 @@ class GameWindow(arcade.Window):
 
                     vec3 night_horizon = vec3(0.08, 0.13, 0.24);
                     vec3 night_zenith = vec3(0.03, 0.06, 0.16);
-                    vec3 day_horizon = vec3(0.78, 0.92, 1.00);
-                    vec3 day_zenith = vec3(0.40, 0.73, 1.00);
+                    vec3 day_horizon = vec3(0.86, 0.96, 1.00);
+                    vec3 day_zenith = vec3(0.62, 0.86, 1.00);
                     vec3 dusk_tint = vec3(1.00, 0.55, 0.32);
 
                     vec3 horizon = mix(night_horizon, day_horizon, pow(u_day_factor, 0.85));
@@ -199,12 +199,13 @@ class GameWindow(arcade.Window):
         return False
 
     def _ambient_color(self) -> tuple[int, int, int]:
-        """Am Tag hell genug für natürliche Farben, aber nicht so nah an Weiß, dass die Tiefenmaske vollständig weggewischt wird."""
+        """Tagsüber neutral/weiß, damit die Originaltexturfarben erhalten bleiben; Ambient wirkt nur bei Dämmerung/Nacht."""
         day_factor = self._day_factor()
-        if day_factor >= 0.45:
-            return (200, 208, 220)
-        if day_factor > 0.10:
-            return self._lerp_color((80, 90, 120), (200, 208, 220), (day_factor - 0.10) / (0.45 - 0.10))
+        if day_factor >= 0.42:
+            return (255, 255, 255)
+        if day_factor > 0.18:
+            t = (day_factor - 0.18) / (0.42 - 0.18)
+            return self._lerp_color((110, 120, 160), (255, 255, 255), t)
         return (55, 66, 95)
 
     def _draw_sky_shader(self):
@@ -389,25 +390,30 @@ class GameWindow(arcade.Window):
             column_shadow_strength[tile_x] = local_shadow * canopy_weight
 
         day_factor = self._day_factor()
-        darkness_scale = 0.42 + (1.0 - day_factor) * 2.2
-        daylight_alpha_scale = 0.62 + (1.0 - day_factor) * 0.88
+        # Die Tiefen-Schattierung darf tagsüber nicht komplett von der Sonne "weggewischt" werden.
+        # Sie ist eine lokale Höhlen-/Tiefenmaske und muss auch bei hellem Tageslicht noch bestehen.
+        darkness_scale = 0.52 + (1.0 - day_factor) * 1.25
+        daylight_alpha_scale = 0.72 + (1.0 - day_factor) * 0.55
+        daylight_alpha_scale = min(1.0, daylight_alpha_scale)
 
         for tile_x in range(min_tile_x, max_tile_x + 1):
             for tile_y in range(min_tile_y, max_tile_y + 1):
                 min_effective_depth = float("inf")
 
-                for dx in range(-lateral_scan, lateral_scan + 1):
-                    source_x = tile_x + dx
-                    source_surface_y, shadow_bonus = surface_info.get(source_x, (-1, 0.0))
-                    vertical_depth = max(0.0, (source_surface_y + 1) - tile_y)
-                    if vertical_depth > 0.0:
-                        shadow_strength = column_shadow_strength.get(source_x, shadow_bonus)
-                        shadow_depth_factor = min(1.0, vertical_depth / 5.0)
-                        vertical_depth += shadow_strength * (1.6 + shadow_depth_factor)
-                    lateral_penalty = abs(dx) * 1.8
-                    effective_depth = vertical_depth + lateral_penalty
-                    if effective_depth < min_effective_depth:
-                        min_effective_depth = effective_depth
+                for dx in range(-1, 2):
+                    for dy in range(-1, 2):
+                        source_x = tile_x + dx
+                        source_surface_y, shadow_bonus = surface_info.get(source_x, (-1, 0.0))
+                        sample_y = tile_y + dy
+                        vertical_depth = max(0.0, (source_surface_y + 1) - sample_y)
+                        if vertical_depth > 0.0:
+                            shadow_strength = column_shadow_strength.get(source_x, shadow_bonus)
+                            shadow_depth_factor = min(1.0, vertical_depth / 5.0)
+                            vertical_depth += shadow_strength * (1.6 + shadow_depth_factor)
+                        lateral_penalty = (abs(dx) + abs(dy)) * 1.8
+                        effective_depth = vertical_depth + lateral_penalty
+                        if effective_depth < min_effective_depth:
+                            min_effective_depth = effective_depth
 
                 if min_effective_depth <= 0:
                     continue
@@ -415,6 +421,12 @@ class GameWindow(arcade.Window):
                 depth_after_threshold = max(0.0, (min_effective_depth - 0.8) * 1.6)
                 alpha = int(min(255, (depth_after_threshold**1.28) * 15.0 * darkness_scale))
                 alpha = int(alpha * daylight_alpha_scale)
+
+                if day_factor >= 0.38:
+                    ambient_alpha = 0
+                else:
+                    ambient_exposure = max(0.0, 1.0 - min_effective_depth / 6.0)
+                    ambient_alpha = int(ambient_exposure * (70.0 + day_factor * 68.0))
 
                 torch_boost = 0.0
                 for torch_tile_x, torch_tile_y in torch_positions:
@@ -428,6 +440,18 @@ class GameWindow(arcade.Window):
 
                 if torch_boost > 0.0:
                     alpha = max(0, int(alpha * (1.0 - min(0.96, torch_boost * 1.1))))
+                    ambient_alpha = max(ambient_alpha, int(ambient_alpha * (1.0 - min(0.7, torch_boost * 0.9))))
+
+                ambient_alpha = max(0, min(255, ambient_alpha))
+                if ambient_alpha > 0:
+                    ambient_color = self._ambient_color()
+                    arcade.draw_lrbt_rectangle_filled(
+                        tile_x * TILE_SIZE,
+                        (tile_x + 1) * TILE_SIZE,
+                        tile_y * TILE_SIZE,
+                        (tile_y + 1) * TILE_SIZE,
+                        (ambient_color[0], ambient_color[1], ambient_color[2], ambient_alpha),
+                    )
 
                 if alpha < 6:
                     continue
@@ -436,7 +460,10 @@ class GameWindow(arcade.Window):
                 bottom = tile_y * TILE_SIZE
                 right = left + TILE_SIZE
                 top = bottom + TILE_SIZE
-                arcade.draw_lrbt_rectangle_filled(left, right, bottom, top, (0, 0, 0, alpha))
+                dark_alpha = max(0, alpha - int(ambient_alpha * 0.7))
+                dark_alpha = max(0, min(255, dark_alpha))
+                if dark_alpha > 0:
+                    arcade.draw_lrbt_rectangle_filled(left, right, bottom, top, (0, 0, 0, dark_alpha))
 
     def _celestial_position(self, progress: float) -> tuple[float, float]:
         """Bildschirmposition auf einer echten Ellipsen-Halbbahn (rechts nach links)."""
