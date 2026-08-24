@@ -351,6 +351,57 @@ class GameWindow(arcade.Window):
 
         return positions
 
+    def _compute_connected_sky_light(
+        self,
+        min_tile_x: int,
+        max_tile_x: int,
+        min_tile_y: int,
+        max_tile_y: int,
+    ) -> dict[tuple[int, int], float]:
+        """Propagiert Tageslicht durch zusammenhängende Luftblöcke im sichtbaren Bereich."""
+        from collections import deque
+
+        sky_light: dict[tuple[int, int], float] = {}
+        queue: deque[tuple[tuple[int, int], float]] = deque()
+
+        for tile_x in range(min_tile_x, max_tile_x + 1):
+            for tile_y in range(min_tile_y, max_tile_y + 1):
+                if self.world.get_block(tile_x, tile_y, generate_if_missing=False) != AIR:
+                    continue
+
+                sky_clear = True
+                for check_y in range(tile_y + 1, min(max_tile_y + 8, WORLD_HEIGHT)):
+                    if self.world.get_block(tile_x, check_y, generate_if_missing=False) != AIR:
+                        sky_clear = False
+                        break
+
+                if sky_clear:
+                    cell = (tile_x, tile_y)
+                    sky_light[cell] = 1.0
+                    queue.append((cell, 1.0))
+
+        while queue:
+            (tile_x, tile_y), strength = queue.popleft()
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+                nx = tile_x + dx
+                ny = tile_y + dy
+                if nx < min_tile_x or nx > max_tile_x:
+                    continue
+                if ny < min_tile_y or ny > max_tile_y:
+                    continue
+                if self.world.get_block(nx, ny, generate_if_missing=False) != AIR:
+                    continue
+
+                weight = 0.82 if abs(dx) + abs(dy) == 1 else 0.63
+                next_strength = strength * weight
+                key = (nx, ny)
+                if next_strength <= sky_light.get(key, 0.0):
+                    continue
+                sky_light[key] = next_strength
+                queue.append((key, next_strength))
+
+        return sky_light
+
     def _draw_underground_darkness_overlay(self):
         """Zeichnet die Tiefe anhand der Nachbar-Block-Struktur; keine globale Höhlen-Erkennung mehr."""
         min_tile_x, max_tile_x = self._get_visible_tile_x_range(margin_tiles=2)
@@ -368,8 +419,9 @@ class GameWindow(arcade.Window):
         arcade.draw_lrbt_rectangle_filled(visible_left, visible_right, visible_bottom, visible_top, base_color)
 
         torch_positions = self._torch_shadow_positions()
+        connected_sky_light = self._compute_connected_sky_light(min_tile_x, max_tile_x, min_tile_y, max_tile_y)
 
-        lateral_scan = 9
+        lateral_scan = 12
         scan_min_x = min_tile_x - lateral_scan
         scan_max_x = max_tile_x + lateral_scan
         surface_info: dict[int, tuple[int, float]] = {}
@@ -381,36 +433,36 @@ class GameWindow(arcade.Window):
             local_shadow = surface_info.get(tile_x, (-1, 0.0))[1]
             neighbor_total = 0.0
             neighbor_count = 0
-            for nx in range(tile_x - 2, tile_x + 3):
+            for nx in range(tile_x - 4, tile_x + 5):
                 neighbor_total += surface_info.get(nx, (-1, 0.0))[1]
                 neighbor_count += 1
 
             neighbor_avg = neighbor_total / max(1, neighbor_count)
-            canopy_weight = max(0.0, min(1.0, (neighbor_avg - 0.22) / 0.85))
+            canopy_weight = max(0.0, min(1.0, (neighbor_avg - 0.18) / 0.9))
             column_shadow_strength[tile_x] = local_shadow * canopy_weight
 
         day_factor = self._day_factor()
-        # Die Tiefen-Schattierung darf tagsüber nicht komplett von der Sonne "weggewischt" werden.
-        # Sie ist eine lokale Höhlen-/Tiefenmaske und muss auch bei hellem Tageslicht noch bestehen.
-        darkness_scale = 0.52 + (1.0 - day_factor) * 1.25
-        daylight_alpha_scale = 0.72 + (1.0 - day_factor) * 0.55
+        darkness_scale = 0.52 + (1.0 - day_factor) * 1.2
+        daylight_alpha_scale = 0.78 + (1.0 - day_factor) * 0.45
         daylight_alpha_scale = min(1.0, daylight_alpha_scale)
 
         for tile_x in range(min_tile_x, max_tile_x + 1):
             for tile_y in range(min_tile_y, max_tile_y + 1):
                 min_effective_depth = float("inf")
 
-                for dx in range(-1, 2):
-                    for dy in range(-1, 2):
+                for dx in range(-3, 4):
+                    for dy in range(-2, 3):
                         source_x = tile_x + dx
                         source_surface_y, shadow_bonus = surface_info.get(source_x, (-1, 0.0))
                         sample_y = tile_y + dy
                         vertical_depth = max(0.0, (source_surface_y + 1) - sample_y)
                         if vertical_depth > 0.0:
                             shadow_strength = column_shadow_strength.get(source_x, shadow_bonus)
-                            shadow_depth_factor = min(1.0, vertical_depth / 5.0)
-                            vertical_depth += shadow_strength * (1.6 + shadow_depth_factor)
-                        lateral_penalty = (abs(dx) + abs(dy)) * 1.8
+                            shadow_depth_factor = min(1.0, vertical_depth / 6.0)
+                            vertical_depth += shadow_strength * (1.8 + shadow_depth_factor)
+
+                        diagonal_weight = 0.55 if abs(dx) > 0 and abs(dy) > 0 else 1.0
+                        lateral_penalty = (abs(dx) + abs(dy) * 0.7) * 1.4 * diagonal_weight
                         effective_depth = vertical_depth + lateral_penalty
                         if effective_depth < min_effective_depth:
                             min_effective_depth = effective_depth
@@ -418,8 +470,8 @@ class GameWindow(arcade.Window):
                 if min_effective_depth <= 0:
                     continue
 
-                depth_after_threshold = max(0.0, (min_effective_depth - 0.8) * 1.6)
-                alpha = int(min(255, (depth_after_threshold**1.28) * 15.0 * darkness_scale))
+                depth_after_threshold = max(0.0, (min_effective_depth - 0.7) * 1.35)
+                alpha = int(min(255, (depth_after_threshold**1.18) * 14.5 * darkness_scale))
                 alpha = int(alpha * daylight_alpha_scale)
 
                 if day_factor >= 0.38:
@@ -452,6 +504,9 @@ class GameWindow(arcade.Window):
                         (tile_y + 1) * TILE_SIZE,
                         (ambient_color[0], ambient_color[1], ambient_color[2], ambient_alpha),
                     )
+
+                connected_light = connected_sky_light.get((tile_x, tile_y), 0.0)
+                alpha = int(alpha * max(0.0, 1.0 - min(0.98, connected_light * 0.98)))
 
                 if alpha < 6:
                     continue
