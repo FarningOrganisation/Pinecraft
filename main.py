@@ -199,13 +199,13 @@ class GameWindow(arcade.Window):
         return False
 
     def _ambient_color(self) -> tuple[int, int, int]:
-        """Sehr helles Tageslicht, damit die Oberfläche am Tag deutlich viel heller wirkt."""
+        """Am Tag darf das Ambient-Lighting nicht dunkler machen; nur Nacht und Dämmerung färben die Szene."""
         day_factor = self._day_factor()
-        if day_factor > 0.65:
+        if day_factor >= 0.25:
             return (255, 255, 255)
-        if day_factor > 0.22:
-            return self._lerp_color((120, 130, 170), (255, 255, 255), (day_factor - 0.22) / (0.65 - 0.22))
-        return (70, 82, 115)
+        if day_factor > 0.10:
+            return self._lerp_color((80, 90, 120), (255, 255, 255), (day_factor - 0.10) / (0.25 - 0.10))
+        return (55, 66, 95)
 
     def _draw_sky_shader(self):
         """Zeichnet den dynamischen Himmel per Fullscreen-Fragment-Shader."""
@@ -389,7 +389,10 @@ class GameWindow(arcade.Window):
             column_shadow_strength[tile_x] = local_shadow * canopy_weight
 
         day_factor = self._day_factor()
-        darkness_scale = 0.82 - 0.22 * day_factor
+        darkness_scale = 0.14 + (1.0 - day_factor) * 1.05
+
+        if day_factor >= 0.30:
+            darkness_scale *= 0.15
 
         for tile_x in range(min_tile_x, max_tile_x + 1):
             for tile_y in range(min_tile_y, max_tile_y + 1):
@@ -414,6 +417,9 @@ class GameWindow(arcade.Window):
                 depth_after_threshold = max(0.0, min_effective_depth - 1.0)
                 alpha = int(min(220, (depth_after_threshold**1.22) * 10.0 * darkness_scale))
 
+                if day_factor >= 0.65:
+                    alpha = max(0, alpha // 10)
+
                 torch_boost = 0.0
                 for torch_tile_x, torch_tile_y in torch_positions:
                     torch_center_x = (torch_tile_x + 0.5) * TILE_SIZE
@@ -427,7 +433,7 @@ class GameWindow(arcade.Window):
                 if torch_boost > 0.0:
                     alpha = max(0, int(alpha * (1.0 - min(0.96, torch_boost * 1.1))))
 
-                if alpha < 8:
+                if alpha < 6:
                     continue
 
                 left = tile_x * TILE_SIZE
