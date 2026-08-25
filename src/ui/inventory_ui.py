@@ -3,6 +3,7 @@
 import arcade
 
 from blocks import AIR
+from crafting import find_matching_recipe
 from crafting_recipes import CRAFTING_RECIPES
 from inventory import InventorySlot
 
@@ -121,36 +122,26 @@ class InventoryUI:
     def _find_matching_recipe(self):
         """Sucht ein passendes Rezept für den aktuellen 3x3-Grid."""
         grid = self._current_crafting_grid()
-        for result_item, variants in CRAFTING_RECIPES.items():
-            for recipe in variants:
-                if isinstance(recipe, dict):
-                    pattern = recipe.get("pattern")
-                    output_count = int(recipe.get("count", 1))
-                else:
-                    pattern = recipe
-                    output_count = 1
+        return find_matching_recipe(grid, CRAFTING_RECIPES)
 
-                if pattern is None:
-                    continue
-                if len(pattern) != 3 or any(len(recipe_row) != 3 for recipe_row in pattern):
-                    continue
-                if all(grid[row][col] == pattern[row][col] for row in range(3) for col in range(3)):
-                    return result_item, pattern, max(1, output_count)
-        return None, None, 0
-
-    def _crafts_possible_for_pattern(self, pattern):
+    def _crafts_possible_for_pattern(self, pattern, offset=(0, 0)):
         """Berechnet, wie oft ein passendes Rezept crafted werden kann."""
         crafts_possible = None
+        row_offset, col_offset = offset
+
         for row in range(3):
             for col in range(3):
                 required_item = pattern[row][col]
-                index = row * 3 + col
-                slot = self.crafting_slots[index]
-
                 if required_item == AIR:
-                    if slot.item is not None and slot.count > 0:
-                        return 0
                     continue
+
+                target_row = row + row_offset
+                target_col = col + col_offset
+                if target_row < 0 or target_row >= 3 or target_col < 0 or target_col >= 3:
+                    return 0
+
+                index = target_row * 3 + target_col
+                slot = self.crafting_slots[index]
 
                 if slot.item != required_item or slot.count <= 0:
                     return 0
@@ -164,27 +155,32 @@ class InventoryUI:
 
     def _crafting_result_info(self):
         """Gibt (Ergebnisitem, Ausgabemenge pro Craft, crafts_possible, pattern) zurück."""
-        result_item, pattern, output_count = self._find_matching_recipe()
+        result_item, pattern, output_count, offset = self._find_matching_recipe()
         if result_item is None or pattern is None or output_count <= 0:
             return None, 0, 0, None
 
-        crafts_possible = self._crafts_possible_for_pattern(pattern)
+        crafts_possible = self._crafts_possible_for_pattern(pattern, offset or (0, 0))
         if crafts_possible <= 0:
             return None, 0, 0, None
 
         return result_item, output_count, crafts_possible, pattern
 
-    def _consume_crafting_materials(self, crafts_count: int, pattern):
+    def _consume_crafting_materials(self, crafts_count: int, pattern, offset=(0, 0)):
         """Verbraucht Materialien direkt aus den Crafting-Slots."""
         if crafts_count <= 0:
             return
+
+        row_offset, col_offset = offset
 
         for row in range(3):
             for col in range(3):
                 required_item = pattern[row][col]
                 if required_item == AIR:
                     continue
-                index = row * 3 + col
+
+                target_row = row + row_offset
+                target_col = col + col_offset
+                index = target_row * 3 + target_col
                 slot = self.crafting_slots[index]
                 slot.count -= crafts_count
                 if slot.count <= 0:
@@ -262,7 +258,7 @@ class InventoryUI:
                 remaining = inventory.add_item_to_empty_slots(result_item, output_count)
                 if remaining > 0:
                     return False
-                self._consume_crafting_materials(1, pattern)
+                self._consume_crafting_materials(1, pattern, offset)
                 return True
             return False
 
