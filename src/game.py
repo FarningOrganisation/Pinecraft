@@ -15,9 +15,10 @@ from arcade.future.light import Light, LightLayer
 
 from blocks import AIR, BLOCK_TEXTURES, get_block_light_opacity, is_block_skylight_surface
 from dropped_item import DroppedItem
-from enemies.slime import Slime
-from enemies.enemy_spawning import spawn_enemy_at
 from items import ITEM_TEXTURES, TORCH
+from mobs.mob_spawning import spawn_mob_at, spawn_mob_next_to_player
+from mobs.chicken import Chicken
+from mobs.slime import Slime
 from lighting import LightingSystem
 from physics import AABBPhysics
 from player import Player
@@ -55,10 +56,10 @@ class GameWindow(arcade.Window):
         self.mining_sprite_list.append(self.player.mining_animation)
         self.dropped_item_sprite_list = arcade.SpriteList()
         self.dropped_items: list[DroppedItem] = []
-        self.enemy_sprite_list = arcade.SpriteList()
-        self.enemies: list[Slime] = []
-        self.enemy_spawn_timer = 0.0
-        self.max_active_enemies = 5
+        self.mob_sprite_list = arcade.SpriteList()
+        self.mobs: list[Slime] = []
+        self.mob_spawn_timer = 0.0
+        self.max_active_mobs = 5
         self.hotbar = Hotbar(self.player)
         self.health_ui = HealthUI(self.player)
         self.inventory_ui = InventoryUI(self.player, SCREEN_WIDTH, SCREEN_HEIGHT)
@@ -307,16 +308,16 @@ class GameWindow(arcade.Window):
 
         return False
 
-    def _enemy_under_mouse(self, screen_x: float, screen_y: float):
-        """Liefert den Feind unter der Maus oder None."""
+    def _mob_under_mouse(self, screen_x: float, screen_y: float):
+        """Liefert den Mob unter der Maus oder None."""
         world_x, world_y = self._screen_to_world(screen_x, screen_y)
-        for enemy in reversed(self.enemies):
-            left = enemy.center_x - enemy.collision_width / 2
-            right = enemy.center_x + enemy.collision_width / 2
-            bottom = enemy.center_y - enemy.collision_height / 2
-            top = enemy.center_y + enemy.collision_height / 2
+        for mob in reversed(self.mobs):
+            left = mob.center_x - mob.collision_width / 2
+            right = mob.center_x + mob.collision_width / 2
+            bottom = mob.center_y - mob.collision_height / 2
+            top = mob.center_y + mob.collision_height / 2
             if left <= world_x <= right and bottom <= world_y <= top:
-                return enemy
+                return mob
         return None
 
     def _resolve_player_attack(self):
@@ -327,27 +328,27 @@ class GameWindow(arcade.Window):
         hit_left, hit_right, hit_bottom, hit_top = self.player.get_attack_hitbox()
         hit_direction = 1 if self.player.facing_right else -1
 
-        for enemy in self.enemies:
-            if not getattr(enemy, "alive", True):
+        for mob in self.mobs:
+            if not getattr(mob, "alive", True):
                 continue
 
-            enemy_id = id(enemy)
-            if enemy_id in self.player.attack_hit_targets:
+            mob_id = id(mob)
+            if mob_id in self.player.attack_hit_targets:
                 continue
 
-            enemy_left = enemy.center_x - enemy.collision_width / 2
-            enemy_right = enemy.center_x + enemy.collision_width / 2
-            enemy_bottom = enemy.center_y - enemy.collision_height / 2
-            enemy_top = enemy.center_y + enemy.collision_height / 2
+            mob_left = mob.center_x - mob.collision_width / 2
+            mob_right = mob.center_x + mob.collision_width / 2
+            mob_bottom = mob.center_y - mob.collision_height / 2
+            mob_top = mob.center_y + mob.collision_height / 2
 
-            if hit_right < enemy_left or hit_left > enemy_right:
+            if hit_right < mob_left or hit_left > mob_right:
                 continue
-            if hit_top < enemy_bottom or hit_bottom > enemy_top:
+            if hit_top < mob_bottom or hit_bottom > mob_top:
                 continue
 
-            self.player.attack_hit_targets.add(enemy_id)
-            enemy.apply_knockback(hit_direction * 180.0, 120.0, stun_duration=0.35)
-            killed = enemy.take_damage(self.player.attack_damage)
+            self.player.attack_hit_targets.add(mob_id)
+            mob.apply_knockback(hit_direction * 180.0, 120.0, stun_duration=0.35)
+            killed = mob.take_damage(self.player.attack_damage)
             if killed:
                 continue
 
@@ -633,9 +634,9 @@ class GameWindow(arcade.Window):
         self.mining_sprite_list.append(self.player.mining_animation)
         self.dropped_item_sprite_list = arcade.SpriteList()
         self.dropped_items = []
-        self.enemy_sprite_list = arcade.SpriteList()
-        self.enemies = []
-        self.enemy_spawn_timer = 0.0
+        self.mob_sprite_list = arcade.SpriteList()
+        self.mobs = []
+        self.mob_spawn_timer = 0.0
         self.hotbar = Hotbar(self.player)
         self.health_ui = HealthUI(self.player)
         self.inventory_ui = InventoryUI(self.player, SCREEN_WIDTH, SCREEN_HEIGHT)
@@ -654,20 +655,20 @@ class GameWindow(arcade.Window):
         self.light_layer.resize(self.width, self.height)
         self._sync_torch_lights()
 
-    def spawn_enemy(self, enemy_class, x: float, y: float, **enemy_kwargs):
-        """Spawns any enemy class at the requested world position."""
-        if len(self.enemies) >= self.max_active_enemies:
-            print("[enemy-spawn] skipped: max enemy count reached")
+    def spawn_mob(self, mob_class, x: float, y: float, **mob_kwargs):
+        """Spawns any mob class at the requested world position."""
+        if len(self.mobs) >= self.max_active_mobs:
+            print("[mob-spawn] skipped: max mob count reached")
             return None
 
-        return spawn_enemy_at(
+        return spawn_mob_at(
             self.world,
-            enemy_class,
-            self.enemies,
-            self.enemy_sprite_list,
+            mob_class,
+            self.mobs,
+            self.mob_sprite_list,
             x=x,
             y=y,
-            **enemy_kwargs,
+            **mob_kwargs,
         )
 
     def on_update(self, delta_time: float):
@@ -749,7 +750,7 @@ class GameWindow(arcade.Window):
             self._sync_chunk_sprite_cache(loaded_chunks, unloaded_chunks)
 
         self._sync_torch_lights()
-        self._update_enemies(delta_time)
+        self._update_mobs(delta_time)
 
         if self.player.health <= 0:
             self.player.health = 0
@@ -791,7 +792,7 @@ class GameWindow(arcade.Window):
 
         return tile_x, tile_y, item_id
 
-    def _can_spawn_enemy_at(self, world_x: float, world_y: float, ignore_player_distance: bool = False) -> bool:
+    def _can_spawn_mob_at(self, world_x: float, world_y: float, ignore_player_distance: bool = False) -> bool:
         """Prüft, ob an dieser Position ein Slime zuverlässig spawnen darf."""
         tile_x = int(world_x // TILE_SIZE)
         tile_y = int(world_y // TILE_SIZE)
@@ -819,32 +820,20 @@ class GameWindow(arcade.Window):
                 return False
         return True
 
-    def _spawn_test_slime(self):
-        """Spawns exactly one test slime next to the player on demand."""
-        self.spawn_enemy(Slime, self.player.center_x + 96.0, self.player.center_y + 32.0)
-
-        slime = self.enemies[-1]
-        spawn_tile_x = int(slime.center_x // TILE_SIZE)
-        ground_y = self.world.get_ground_top(spawn_tile_x)
-        slime.center_y = ground_y + slime.height / 2
-        slime.on_ground = True
-        slime.change_x = 0.0
-        slime.change_y = 0.0
-        slime.jump_cooldown = 0.0
-        print(
-            f"[enemy-spawn-ground] {slime.__class__.__name__} "
-            f"x={slime.center_x:.1f} y={slime.center_y:.1f} "
-            f"ground_y={ground_y:.1f}"
-        )
-
-    def _spawn_enemy_if_needed(self):
-        """Spawns normal roaming enemies if the timer allows it."""
-        if len(self.enemies) >= self.max_active_enemies:
+    def _spawn_mob_if_needed(self):
+        """Spawns roaming mobs depending on day/night conditions."""
+        if len(self.mobs) >= self.max_active_mobs:
             return
-        if self.enemy_spawn_timer > 0.0:
+        if self.mob_spawn_timer > 0.0:
             return
 
-        for _ in range(18):
+        is_night = self._day_factor() < 0.35
+        spawn_pool: list[type] = [Chicken]
+        if is_night:
+            spawn_pool = [Slime, Chicken]
+
+        for _ in range(24):
+            mob_class = random.choice(spawn_pool)
             angle = random.uniform(0.0, 2.0 * math.pi)
             distance = random.uniform(700.0, 1800.0)
             spawn_x = self.player.center_x + math.cos(angle) * distance
@@ -852,32 +841,31 @@ class GameWindow(arcade.Window):
             ground_y = self.world.get_ground_top(spawn_tile_x)
             spawn_y = ground_y + 14.0
 
-            if not self._can_spawn_enemy_at(spawn_x, spawn_y):
+            if not self._can_spawn_mob_at(spawn_x, spawn_y):
                 continue
 
-            slime = Slime(self.world, x=spawn_x, y=spawn_y)
-            self.enemies.append(slime)
-            self.enemy_sprite_list.append(slime)
-            self.enemy_spawn_timer = 3.0
-            return
+            spawned = self.spawn_mob(mob_class, spawn_x, spawn_y)
+            if spawned is not None:
+                self.mob_spawn_timer = 3.0 if mob_class is Slime else 5.0
+                return
 
-    def _update_enemies(self, delta_time: float):
-        """Aktualisiert alle Feinde und entfernt tote Feinde aus der Liste."""
-        alive_enemies: list[Slime] = []
-        for enemy in self.enemies:
-            if not getattr(enemy, "alive", True):
-                self.enemy_sprite_list.remove(enemy)
+    def _update_mobs(self, delta_time: float):
+        """Aktualisiert alle Mobs und entfernt tote Mobs aus der Liste."""
+        alive_mobs: list[Slime] = []
+        for mob in self.mobs:
+            if not getattr(mob, "alive", True):
+                self.mob_sprite_list.remove(mob)
                 continue
 
-            enemy.update_ai(delta_time, self.player)
-            if enemy.health <= 0 or enemy.center_y < -64:
-                self.enemy_sprite_list.remove(enemy)
+            mob.update(delta_time, self.player)
+            if mob.health <= 0 or mob.center_y < -64:
+                self.mob_sprite_list.remove(mob)
                 continue
-            alive_enemies.append(enemy)
+            alive_mobs.append(mob)
 
-        self.enemies = alive_enemies
-        self.enemy_spawn_timer = max(0.0, self.enemy_spawn_timer - delta_time)
-        self._spawn_enemy_if_needed()
+        self.mobs = alive_mobs
+        self.mob_spawn_timer = max(0.0, self.mob_spawn_timer - delta_time)
+        self._spawn_mob_if_needed()
 
     def on_draw(self):
         """Zeichnet die Szene und die Minecraft-artige Hotbar."""
@@ -905,7 +893,7 @@ class GameWindow(arcade.Window):
                     chunk_sprites.draw()
             self._draw_placed_world_items()
             self.dropped_item_sprite_list.draw()
-            self.enemy_sprite_list.draw()
+            self.mob_sprite_list.draw()
             self.player.draw_held_item(layer="back")
             self.player_sprite_list.draw()
             self.player.draw_held_item(layer="front")
@@ -959,7 +947,7 @@ class GameWindow(arcade.Window):
             return
 
         if symbol == arcade.key.P:
-            self._spawn_test_slime()
+            spawn_mob_next_to_player(self.world, self.player, Slime, self.mobs, self.mob_sprite_list)
             return
 
         if 49 <= symbol <= 57:
@@ -1006,8 +994,8 @@ class GameWindow(arcade.Window):
             return
 
         if button == arcade.MOUSE_BUTTON_LEFT:
-            enemy = self._enemy_under_mouse(x, y)
-            if enemy is not None:
+            mob = self._mob_under_mouse(x, y)
+            if mob is not None:
                 self.player.start_attack()
                 return
 

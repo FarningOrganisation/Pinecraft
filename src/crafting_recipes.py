@@ -1,7 +1,14 @@
 """3x3-Crafting-Rezepte für Pinecraft."""
 
-from blocks import AIR, DIRT, OAK, OAK_PLANKS, STONE
-from items import CHARCOAL, PICKAXE, STICK, TORCH
+from blocks import AIR, DIRT, OAK, OAK_PLANKS, STONE, COBBLESTONE
+from items import (
+    CHARCOAL, 
+    STONE_PICKAXE, 
+    STICK, 
+    TORCH,
+    IRON_PICKAXE,
+    IRON_INGOT
+)
 
 
 def _single_cell_variants(item_id: int) -> list[list[list[int]]]:
@@ -28,13 +35,23 @@ def _vertical_pair_variants(top_item: int, bottom_item: int) -> list[list[list[i
 
 CRAFTING_RECIPES = {
     # TODO_STUDENT (⭐): Spiel starten und dieses Pickaxe-Rezept nachvollziehen.
-    PICKAXE: [
+    STONE_PICKAXE: [
         {
             "pattern": [
-                [STONE, STONE, STONE],
-                [AIR, DIRT, AIR],
-                [AIR, DIRT, AIR],
+                [COBBLESTONE, COBBLESTONE, COBBLESTONE],
+                [AIR, STICK, AIR],
+                [AIR, STICK, AIR],
             ],
+            "count": 1,
+        }
+    ],
+    IRON_PICKAXE: [
+        {
+            "pattern": [
+                [IRON_INGOT, IRON_INGOT, IRON_INGOT],
+                [AIR, STICK, AIR],
+                [AIR, STICK, AIR],
+                        ],
             "count": 1,
         }
     ],

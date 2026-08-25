@@ -1,0 +1,1 @@
+- add bin into inventory/crafting

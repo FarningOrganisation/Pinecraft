@@ -7,12 +7,11 @@ import math
 import arcade
 from paths import textures_dir
 
-from enemies.enemy import Enemy
-from enemies.enemy_physics import update_enemy_physics
+from mobs.mob import Monster
 from sprite_animation import SpriteAnimation
 
 
-class Slime(Enemy):
+class Slime(Monster):
     """A simple jumping slime that chases the player."""
     # TODO_STUDENT (⭐⭐⭐): BabySlime einfuehren und beim Tod grosser Slimes spawnen.
 
@@ -30,7 +29,7 @@ class Slime(Enemy):
         self.jump_speed = 370.0
         self.jump_cooldown = 0.4
 
-        enemy_texture_dir = textures_dir("enemies")
+        enemy_texture_dir = textures_dir("mobs")
         idle_texture = arcade.load_texture(enemy_texture_dir / "slimeBlue.png")
         move_texture = arcade.load_texture(enemy_texture_dir / "slimeBlue_move.png")
 
@@ -64,7 +63,7 @@ class Slime(Enemy):
             self.change_x = direction * self.speed * 0.7
 
     def update_ai(self, delta_time: float, player):
-        """Handles slime movement, state changes, and contact damage."""
+        """Aggressive slime AI: chase the player when in range; otherwise wander."""
         if not self.alive:
             return
 
@@ -82,13 +81,11 @@ class Slime(Enemy):
         if self.alerted and self.stun_timer <= 0.0:
             self.move_toward_player(player, delta_time)
             self.set_state("move")
-        elif self.stun_timer > 0.0:
+            return
+
+        if self.stun_timer > 0.0:
             self.change_x *= 0.92
-        else:
-            self.change_x = 0.0
-            self.set_state("idle")
+            return
 
-        update_enemy_physics(self, delta_time)
-
-        self.handle_contact_damage(player, delta_time)
-        super().update(delta_time)
+        self._update_wander_behavior(delta_time)
+        self.set_state("move" if abs(self.change_x) > 0.1 else "idle")

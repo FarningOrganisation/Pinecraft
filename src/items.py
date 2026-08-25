@@ -8,7 +8,7 @@ from paths import textures_dir
 ITEM_ID_START = 1024
 
 
-PICKAXE = ITEM_ID_START
+STONE_PICKAXE = ITEM_ID_START
 CHARCOAL = ITEM_ID_START + 1
 IRON_INGOT = ITEM_ID_START + 2
 GOLD_INGOT = ITEM_ID_START + 3
@@ -16,15 +16,24 @@ DIAMOND = ITEM_ID_START + 4
 STICK = ITEM_ID_START + 5
 TORCH = ITEM_ID_START + 6
 STONE_SWORD = ITEM_ID_START + 7
+IRON_PICKAXE = ITEM_ID_START + 8
 
 ITEMS = {
-    PICKAXE: {
-        "item_id": PICKAXE,
+    STONE_PICKAXE: {
+        "item_id": STONE_PICKAXE,
         "name": "Stone Pickaxe",
         "texture": "stone_pickaxe.png",
         "item_type": "tool",  # consumable, tool, material
         "max_stack": 1,
         "mining_speed": 2,
+    },
+    IRON_PICKAXE: {
+        "item_id": IRON_PICKAXE,
+        "name": "Iron Pickaxe",
+        "texture": "iron_pickaxe.png",
+        "item_type": "tool",
+        "max_stack": 1,
+        "mining_speed": 3
     },
     STONE_SWORD: {
         "item_id": STONE_SWORD,

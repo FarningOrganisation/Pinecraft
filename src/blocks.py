@@ -18,13 +18,14 @@ IRON_ORE = 9
 GOLD_ORE = 10
 DIAMOND_ORE = 11
 OAK_PLANKS = 12
+COBBLESTONE = 13
 
 from items import CHARCOAL, DIAMOND, GOLD_INGOT, IRON_INGOT
 
 BLOCKS = {
     GRASS: {"name": "Grass", "texture": "grass.png", "solid": True, "drop_id": DIRT},
     DIRT: {"name": "Dirt", "texture": "dirt.png", "solid": True},
-    STONE: {"name": "Stone", "texture": "stone.png", "solid": True, "hardness": 2},
+    STONE: {"name": "Stone", "texture": "stone.png", "solid": True, "hardness": 2, "drop_id": COBBLESTONE},
     SAND: {"name": "Sand", "texture": "sand.png", "solid": True},
     # TODO_STUDENT (⭐⭐): Sand erweitern, z. B. mit Fallverhalten in der Physik.
     BEDROCK: {"name": "Bedrock", "texture": "bedrock.png", "solid": True, "hardness": float("inf")},
@@ -41,6 +42,7 @@ BLOCKS = {
     GOLD_ORE: {"name": "Gold Ore", "texture": "gold_ore.png", "solid": True, "hardness": 2.6, "drop_id": GOLD_INGOT},
     DIAMOND_ORE: {"name": "Diamond Ore", "texture": "diamond_ore.png", "solid": True, "hardness": 3.0, "drop_id": DIAMOND},
     OAK_PLANKS: {"name": "Oak Planks", "texture": "planks_oak.png", "solid": True},
+    COBBLESTONE: {"name": "Cobblestone", "texture": "cobblestone.png", "solid": True, "hardness": 2.0}
 }
 
 
