@@ -17,7 +17,7 @@ STICK = ITEM_ID_START + 5
 TORCH = ITEM_ID_START + 6
 STONE_SWORD = ITEM_ID_START + 7
 IRON_PICKAXE = ITEM_ID_START + 8
-
+HAMMER = ITEM_ID_START +9
 ITEMS = {
     STONE_PICKAXE: {
         "item_id": STONE_PICKAXE,
@@ -35,6 +35,14 @@ ITEMS = {
         "max_stack": 1,
         "mining_speed": 3
     },
+    HAMMER: {
+                "item_id": HAMMER,
+                "name": "HAMMER",
+                "texture": "hammer.png",
+                "item_type": "tool",
+                "max_stack": 1,
+                "attack_damage": 20,
+     },
     STONE_SWORD: {
         "item_id": STONE_SWORD,
         "name": "Stone Sword",

@@ -7,6 +7,7 @@ import math
 from animated_sprite import AnimatedSprite
 from blocks import AIR, is_block_solid
 from settings import GRAVITY, TILE_SIZE
+import random
 
 
 class Mob(AnimatedSprite):
@@ -17,15 +18,20 @@ class Mob(AnimatedSprite):
         world,
         x: float,
         y: float,
+        animations,
+        default_state,
         health: int = 3,
         speed: float = 90.0,
     ):
-        super().__init__(animations={}, default_state="idle", facing_right=True)
+        super().__init__(animations=animations, default_state=default_state, facing_right=True)
 
         self.world = world
         self.max_health = max(1, health)
         self.health = self.max_health
         self.speed = speed
+
+        self.vanish_after_death_timer = 0.5
+        self.damage_flash_timer = 0.0
 
         self.change_x = 0.0
         self.change_y = 0.0
@@ -33,14 +39,16 @@ class Mob(AnimatedSprite):
         self.stun_timer = 0.0
         self.aggro_timer = 0.0
         self.walk_direction = 1
-        self.jump_strength = 330.0
+        self.jump_strength = 350.0
         self.jump_cooldown = 0.0
         self.alive = True
+        self.needs_turning = False
 
-        self.width = 28
-        self.height = 28
-        self.collision_width = 28
-        self.collision_height = 28
+        current_frame = self.current_animation.frames[0]
+        self.width = current_frame.width
+        self.height = current_frame.height
+        self.collision_width = current_frame.width
+        self.collision_height = current_frame.height
         self.center_x = x
         self.center_y = y
 
@@ -183,15 +191,17 @@ class Mob(AnimatedSprite):
 
         self.facing_right = self.walk_direction >= 0
 
-        if self.on_ground and self._has_wall_in_front(self.walk_direction):
-            if self.jump_cooldown <= 0.0 and self._can_jump_over_obstacle(self.walk_direction):
-                self.change_y = self.jump_strength
+        if self._grounded_below() and self._has_wall_in_front(self.walk_direction):
+
+            if not self.needs_turning and self.jump_cooldown <= 0.0 and self._can_jump_over_obstacle(self.walk_direction):
+                self.change_y = self.jump_strength * (0.9 + random.random() * 0.2)
                 self.change_x = self.walk_direction * self.speed * 0.8
-                self.on_ground = False
                 self.jump_cooldown = 0.45
+                self.needs_turning = True
                 return
 
             self.walk_direction *= -1
+            self.needs_turning = False
             self.change_x = self.walk_direction * self.speed * 0.6
             self.jump_cooldown = max(self.jump_cooldown, 0.15)
             return
@@ -201,6 +211,7 @@ class Mob(AnimatedSprite):
     def update_ai(self, delta_time: float, player):
         """Default AI is passive wandering. Aggressive mobs override this method."""
         if not self.alive:
+            self.vanish_after_death_timer = max(0.0, self.vanish_after_death_timer - delta_time)
             return
 
         if self.stun_timer > 0.0:
@@ -215,7 +226,14 @@ class Mob(AnimatedSprite):
         self.alerted = False
 
     def update(self, delta_time: float, player=None):
-        """Default mob update: AI -> physics -> animation."""
+        """Default mob update: AI -> physics -> animation plus a brief damage tint."""
+        if self.damage_flash_timer > 0.0:
+            self.damage_flash_timer = max(0.0, self.damage_flash_timer - delta_time)
+            if self.damage_flash_timer > 0.0:
+                self.color = (255, 120, 120)
+            else:
+                self.color = (255, 255, 255)
+
         if player is not None:
             self.update_ai(delta_time, player)
         self.apply_physics(delta_time)
@@ -227,6 +245,8 @@ class Mob(AnimatedSprite):
             return False
 
         self.health -= amount
+        self.damage_flash_timer = 0.15
+        self.on_take_damage(amount)
         if self.health <= 0:
             self.health = 0
             self.alive = False
@@ -236,77 +256,12 @@ class Mob(AnimatedSprite):
         self.aggro_timer = max(self.aggro_timer, 2.5)
         return False
 
+    # function zum Überschreiben
+    def on_take_damage(self, amount):
+        pass
 
-class Monster(Mob):
-    """A mob that can detect, chase, and damage the player."""
 
-    def __init__(
-        self,
-        world,
-        x: float,
-        y: float,
-        health: int = 3,
-        activate_range: float = 260.0,
-        attack_range: float = 32.0,
-        speed: float = 90.0,
-        damage: int = 1,
-    ):
-        super().__init__(world, x=x, y=y, health=health, speed=speed)
-        self.activate_range = activate_range
-        self.attack_range = attack_range
-        self.damage = damage
-        self.contact_cooldown = 0.0
-        self.alerted = False
 
-    def _can_see_player(self, player) -> bool:
-        """Player is close enough to trigger hostile behavior."""
-        if player is None:
-            return False
-        dx = player.center_x - self.center_x
-        dy = player.center_y - self.center_y
-        distance = math.hypot(dx, dy)
-        return distance <= self.activate_range or self.aggro_timer > 0.0
-
-    def move_toward_player(self, player, delta_time: float, *, speed: float | None = None):
-        """Generic horizontal movement toward the player without jumping behavior."""
-        if player is None:
-            return
-
-        direction = self.player_direction(player)
-        self.facing_right = direction >= 0
-        effective_speed = self.speed if speed is None else speed
-        dx = abs(player.center_x - self.center_x)
-        if dx <= 0:
-            return
-
-        step = min(dx, effective_speed * delta_time)
-        self.center_x += direction * step
-        self.change_x = direction * effective_speed
-
-        if self.center_y < 0:
-            self.center_y = 0.0
-
-    def update(self, delta_time: float, player=None):
-        """Monster update: shared mob logic + attack contact damage."""
-        super().update(delta_time, player)
-        if player is not None:
-            self.handle_contact_damage(player, delta_time)
-
-    def handle_contact_damage(self, player, delta_time: float) -> None:
-        """Damages the player on direct contact within range."""
-        if player is None or not self.alive or self.stun_timer > 0.0:
-            return
-
-        self.contact_cooldown = max(0.0, self.contact_cooldown - delta_time)
-        if self.contact_cooldown > 0.0:
-            return
-
-        dx = abs(player.center_x - self.center_x)
-        dy = abs(player.center_y - self.center_y)
-        if dx < (player.width * 0.65 + self.width * 0.65) and dy < (player.height * 0.65 + self.height * 0.65):
-            if hasattr(player, "take_damage"):
-                player.take_damage(self.damage)
-            self.contact_cooldown = 1.0
 
 
 Enemy = Mob

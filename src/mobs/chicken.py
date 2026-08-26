@@ -7,9 +7,9 @@ from mobs.mob import Mob
 
 class Chicken(Mob):
     def __init__(self, world: World, x, y):
-        super().__init__(world, x, y, health=3, speed=120)
         text_dir = textures_dir("mobs")
-        self.animations = {
+        animations = {
             "walking": SpriteAnimation([text_dir / "chicken.png"]),
         }
-        self.set_state("walking")
+        default_state = "walking"
+        super().__init__(world, x, y, health=3, speed=120, animations=animations, default_state=default_state)

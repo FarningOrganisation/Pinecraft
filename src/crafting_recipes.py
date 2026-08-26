@@ -8,6 +8,7 @@ from items import (
     TORCH,
     IRON_PICKAXE,
     IRON_INGOT,
+    HAMMER,
 )
 
 
@@ -24,6 +25,15 @@ CRAFTING_RECIPES = {
     IRON_PICKAXE: {
         "pattern": [
             [IRON_INGOT, IRON_INGOT, IRON_INGOT],
+            [AIR, STICK, AIR],
+            [AIR, STICK, AIR],
+        ],
+        "count": 1,
+    },
+    HAMMER:
+    {
+        "pattern": [
+            [COBBLESTONE, IRON_INGOT, COBBLESTONE],
             [AIR, STICK, AIR],
             [AIR, STICK, AIR],
         ],

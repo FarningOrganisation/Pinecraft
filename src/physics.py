@@ -12,6 +12,20 @@ from blocks import AIR, is_block_solid
 from settings import GRAVITY, TILE_SIZE
 
 
+def aabb_from_center(center_x: float, center_y: float, width: float, height: float) -> tuple[float, float, float, float]:
+    """Builds an axis-aligned box from center coordinates and dimensions."""
+    half_w = width / 2.0
+    half_h = height / 2.0
+    return center_x - half_w, center_x + half_w, center_y - half_h, center_y + half_h
+
+
+def aabb_overlap(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+    """Returns True when two AABBs intersect."""
+    a_left, a_right, a_bottom, a_top = a
+    b_left, b_right, b_bottom, b_top = b
+    return a_left < b_right and a_right > b_left and a_bottom < b_top and a_top > b_bottom
+
+
 class AABBPhysics:
     """Einfache, lokale Kollision und Gravitation für einen Spieler."""
 

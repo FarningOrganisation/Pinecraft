@@ -1,3 +1,13 @@
 # Project caches
 pccache/
 .pccache/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# macOS metadata
+.DS_Store
+**/.DS_Store

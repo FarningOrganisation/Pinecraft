@@ -7,7 +7,7 @@ import math
 import arcade
 from paths import textures_dir
 
-from mobs.mob import Monster
+from mobs.monster import Monster
 from sprite_animation import SpriteAnimation
 
 
@@ -16,6 +16,14 @@ class Slime(Monster):
     # TODO_STUDENT (⭐⭐⭐): BabySlime einfuehren und beim Tod grosser Slimes spawnen.
 
     def __init__(self, world, x: float, y: float, health: int = 3):
+        enemy_texture_dir = textures_dir("mobs")
+        idle_texture = arcade.load_texture(enemy_texture_dir / "slimeBlue.png")
+        move_texture = arcade.load_texture(enemy_texture_dir / "slimeBlue_move.png")
+
+        animations = {
+            "idle": SpriteAnimation([idle_texture, move_texture], fps=1.5, loop=True),
+            "move": SpriteAnimation([idle_texture, move_texture], fps=6.0, loop=True),
+        }
         super().__init__(
             world,
             x=x,
@@ -25,24 +33,16 @@ class Slime(Monster):
             attack_range=32.0,
             speed=80.0,
             damage=1,
+            animations=animations,
+            default_state="idle"
         )
         self.jump_speed = 370.0
         self.jump_cooldown = 0.4
 
-        enemy_texture_dir = textures_dir("mobs")
-        idle_texture = arcade.load_texture(enemy_texture_dir / "slimeBlue.png")
-        move_texture = arcade.load_texture(enemy_texture_dir / "slimeBlue_move.png")
-
-        self.animations = {
-            "idle": SpriteAnimation([idle_texture, move_texture], fps=1.5, loop=True),
-            "move": SpriteAnimation([idle_texture, move_texture], fps=6.0, loop=True),
-        }
-        self.current_animation = self.animations["idle"]
         self.texture = self.current_animation.texture
         self.scale = 0.65
         self.collision_width = self.width * 0.45
         self.collision_height = self.height
-        self.current_state = "idle"
 
     def move_toward_player(self, player, delta_time: float, *, speed: float | None = None):
         """Slime-specific movement with a jump arc toward the player."""

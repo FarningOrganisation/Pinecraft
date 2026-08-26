@@ -560,14 +560,19 @@ class Player(AnimatedSprite):
         if place_target is None or selected_entry is None or self.inventory.get_item_count(selected_entry) <= 0:
             return False
 
+        has_support = False
         for ny, nx in ((-1, 0), (1, 0), (0, 1), (0, -1)):
             support_x = tile_x - nx
             support_y = tile_y - ny
             if support_y < 0:
-                return False
+                continue
             support_id = world.get_block(support_x, support_y)
-            if support_id == AIR or not is_block_solid(support_id):
-                return False
+            if support_id != AIR and is_block_solid(support_id):
+                has_support = True
+                break
+
+        if not has_support:
+            return
 
         block_center_x, block_center_y = world.to_world_position(tile_x, tile_y)
         block_left = block_center_x - TILE_SIZE / 2

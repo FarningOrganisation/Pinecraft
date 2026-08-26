@@ -17,10 +17,12 @@ from blocks import AIR, BLOCK_TEXTURES, get_block_light_opacity, is_block_skylig
 from dropped_item import DroppedItem
 from items import ITEM_TEXTURES, TORCH
 from mobs.mob_spawning import spawn_mob_at, spawn_mob_next_to_player
+from mobs.mob import Mob
 from mobs.chicken import Chicken
 from mobs.slime import Slime
+from mobs.zombie import Zombie
 from lighting import LightingSystem
-from physics import AABBPhysics
+from physics import AABBPhysics, aabb_overlap
 from player import Player
 from ui.health_ui import HealthUI
 from ui.hotbar import Hotbar
@@ -341,9 +343,7 @@ class GameWindow(arcade.Window):
             mob_bottom = mob.center_y - mob.collision_height / 2
             mob_top = mob.center_y + mob.collision_height / 2
 
-            if hit_right < mob_left or hit_left > mob_right:
-                continue
-            if hit_top < mob_bottom or hit_bottom > mob_top:
+            if not aabb_overlap((hit_left, hit_right, hit_bottom, hit_top), (mob_left, mob_right, mob_bottom, mob_top)):
                 continue
 
             self.player.attack_hit_targets.add(mob_id)
@@ -831,7 +831,7 @@ class GameWindow(arcade.Window):
         is_night = self._day_factor() < 0.35
         spawn_pool: list[type] = [Chicken]
         if is_night:
-            spawn_pool = [Slime, Chicken]
+            spawn_pool = [Slime, Zombie, Chicken]
 
         for _ in range(24):
             mob_class = random.choice(spawn_pool)
@@ -851,15 +851,19 @@ class GameWindow(arcade.Window):
                 return
 
     def _update_mobs(self, delta_time: float):
-        """Aktualisiert alle Mobs und entfernt tote Mobs aus der Liste."""
-        alive_mobs: list[Slime] = []
+        """Aktualisiert alle Mobs und entfernt tote Mobs erst nach dem Verfallszeitpunkt."""
+        alive_mobs: list[Mob] = []
         for mob in self.mobs:
+            mob.update(delta_time, self.player)
+
             if not getattr(mob, "alive", True):
-                self.mob_sprite_list.remove(mob)
+                if getattr(mob, "vanish_after_death_timer", 0.0) <= 0.0:
+                    self.mob_sprite_list.remove(mob)
+                    continue
+                alive_mobs.append(mob)
                 continue
 
-            mob.update(delta_time, self.player)
-            if mob.health <= 0 or mob.center_y < -64:
+            if mob.center_y < -64:
                 self.mob_sprite_list.remove(mob)
                 continue
             alive_mobs.append(mob)
@@ -948,7 +952,7 @@ class GameWindow(arcade.Window):
             return
 
         if symbol == arcade.key.P:
-            spawn_mob_next_to_player(self.world, self.player, Slime, self.mobs, self.mob_sprite_list)
+            spawn_mob_next_to_player(self.world, self.player, Zombie, self.mobs, self.mob_sprite_list)  
             return
 
         if 49 <= symbol <= 57:
