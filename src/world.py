@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from blocks import AIR, is_block_solid
+from blocks import AIR, SAND, is_block_falling, is_block_solid
 from settings import WORLD_SEED
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
 
@@ -125,6 +125,140 @@ class World:
     ):
         """Lädt Chunks im Radius, optional mit Budget pro Aufruf."""
         return self.generator.update_loaded_chunks(self, world_x, max_loads=max_loads, max_unloads=max_unloads)
+
+    def iter_blocks(
+        self,
+        *,
+        block_id: int | None = None,
+        predicate=None,
+        center_x: float | None = None,
+        radius_tiles: int = 24,
+        min_y: int = 0,
+        max_y: int = WORLD_HEIGHT,
+    ):
+        """Yields alle Block-Positionen, die entweder einem Typ oder einer Eigenschaft entsprechen."""
+        if not self.chunks:
+            return
+        if block_id is not None and predicate is not None:
+            raise ValueError("Use either block_id or predicate, not both.")
+
+        def matches(block_value: int) -> bool:
+            if block_id is not None:
+                return block_value == block_id
+            if predicate is not None:
+                return bool(predicate(block_value))
+            return block_value != AIR
+
+        center_chunk_x = None
+        min_chunk_x = 0
+        max_chunk_x = 0
+        if center_x is not None:
+            center_chunk_x, _ = world_to_chunk_and_local(int(math.floor(center_x / TILE_SIZE)))
+            min_chunk_x = center_chunk_x - max(1, math.ceil(radius_tiles / CHUNK_WIDTH))
+            max_chunk_x = center_chunk_x + max(1, math.ceil(radius_tiles / CHUNK_WIDTH))
+
+        positions: list[tuple[int, int]] = []
+        for chunk_x, chunk in self.chunks.items():
+            if center_chunk_x is not None and not (min_chunk_x <= chunk_x <= max_chunk_x):
+                continue
+
+            for y in range(max(0, min_y), min(max_y, WORLD_HEIGHT)):
+                for local_x in range(chunk.width):
+                    block_at = chunk.get_block(local_x, y)
+                    if matches(block_at):
+                        world_x = chunk_x * CHUNK_WIDTH + local_x
+                        positions.append((world_x, y))
+
+        for world_x, y in sorted(positions, key=lambda item: (item[1], item[0])):
+            yield world_x, y
+
+    def iter_blocks_of_type(
+        self,
+        block_id: int,
+        center_x: float | None = None,
+        radius_tiles: int = 24,
+        min_y: int = 0,
+        max_y: int = WORLD_HEIGHT,
+    ):
+        """Komfort-Wrapper für eine konkrete Block-ID."""
+        yield from self.iter_blocks(
+            block_id=block_id,
+            center_x=center_x,
+            radius_tiles=radius_tiles,
+            min_y=min_y,
+            max_y=max_y,
+        )
+
+    def _tile_intersects_player(self, player, tile_x: int, tile_y: int) -> bool:
+        """Prüft, ob eine Tile mit dem Spieler-AABB überlappt."""
+        tile_left = tile_x * TILE_SIZE
+        tile_right = tile_left + TILE_SIZE
+        tile_bottom = tile_y * TILE_SIZE
+        tile_top = tile_bottom + TILE_SIZE
+
+        player_left = player.center_x - player.collision_width / 2
+        player_right = player.center_x + player.collision_width / 2
+        player_bottom = player.center_y - player.collision_height / 2
+        player_top = player.center_y + player.collision_height / 2
+
+        return not (
+            tile_right <= player_left
+            or tile_left >= player_right
+            or tile_top <= player_bottom
+            or tile_bottom >= player_top
+        )
+
+    def update_falling_blocks(
+        self,
+        delta_time: float,
+        center_x: float | None = None,
+        radius_tiles: int = 24,
+        player=None,
+    ) -> None:
+        """Lasst alle Blöcke mit falling=True in aktiven Chunks fallen, nacheinander und im Spielerbereich."""
+        del delta_time
+
+        falling_positions: list[tuple[int, int, int]] = []
+        for chunk_x, chunk in self.chunks.items():
+            for local_x in range(chunk.width):
+                for y in range(chunk.height - 1, -1, -1):
+                    block_id = chunk.get_block(local_x, y)
+                    if block_id == AIR or not is_block_falling(block_id):
+                        continue
+                    world_x = chunk_x * CHUNK_WIDTH + local_x
+                    falling_positions.append((world_x, y, block_id))
+
+        for world_x, y, block_id in sorted(falling_positions, key=lambda item: (item[1], item[0])):
+            current_y = y
+            while current_y > 0:
+                below_y = current_y - 1
+                below_block = self.get_block(world_x, below_y, generate_if_missing=False)
+
+                if below_block != AIR:
+                    if player is not None and self._tile_intersects_player(player, world_x, below_y):
+                        player.take_damage(1)
+                    break
+
+                if player is not None and self._tile_intersects_player(player, world_x, below_y):
+                    player.take_damage(1)
+                    current_y = below_y
+                    continue
+
+                self.set_block(world_x, current_y, AIR)
+                self.set_block(world_x, below_y, block_id)
+                current_y = below_y
+
+    def update(
+        self,
+        delta_time: float,
+        center_x: float | None = None,
+        center_y: float | None = None,
+        player=None,
+    ):
+        """Zentrale Welt-Update-Schleife; die Spielklasse ruft das pro Frame auf."""
+        if center_x is not None:
+            self.update_loaded_chunks(center_x)
+        self.update_falling_blocks(delta_time, center_x=center_x, player=player)
 
     def get_loaded_chunk_count(self) -> int:
         """Gibt die Anzahl der aktuell geladenen Chunks zurück."""

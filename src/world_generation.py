@@ -22,6 +22,7 @@ from blocks import (
     IRON_ORE,
     LEAVES,
     OAK,
+    SAND,
     STONE,
 )
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
@@ -339,6 +340,36 @@ class WorldGenerator:
                         continue
                     for dy in range(max(1, boulder_h - abs(dx))):
                         place_generated(world_x + dx, height + 1 + dy, STONE, replace_air_only=True)
+
+        # Pass 3: Sand-Patches unter der Erdoberflaeche als zusammenhaengende Taschen.
+        for local_x in range(chunk.width):
+            height = surface_heights[local_x]
+            world_x = chunk_x * CHUNK_WIDTH + local_x
+            if self._rand01(world_x, salt=901) > 0.28:
+                continue
+
+            patch_radius = 1 + int(self._rand01(world_x, salt=903) * 2)
+            patch_height = 3 + int(self._rand01(world_x, salt=907) * 7)
+            patch_base_y = max(6, height - 10 - int(self._rand01(world_x, salt=905) * 12))
+
+            for dx in range(-patch_radius, patch_radius + 1):
+                neighbor_world_x = world_x + dx
+                neighbor_chunk_x, neighbor_local_x = world_to_chunk_and_local(neighbor_world_x)
+                if neighbor_chunk_x != chunk_x:
+                    continue
+
+                for dy in range(patch_height):
+                    target_y = patch_base_y + dy
+                    if target_y >= height - 1 or target_y >= WORLD_HEIGHT - 1:
+                        continue
+                    if target_y <= 2:
+                        continue
+                    if self._rand01(neighbor_world_x + dy, salt=911) > 0.75:
+                        continue
+
+                    current_block = chunk.get_block(neighbor_local_x, target_y)
+                    if current_block == AIR:
+                        chunk.set_block(neighbor_local_x, target_y, SAND)
 
         for local_x in range(chunk.width):
             height = surface_heights[local_x]

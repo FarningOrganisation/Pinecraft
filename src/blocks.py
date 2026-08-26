@@ -19,30 +19,31 @@ GOLD_ORE = 10
 DIAMOND_ORE = 11
 OAK_PLANKS = 12
 COBBLESTONE = 13
+SAND = 14
 
 from items import CHARCOAL, DIAMOND, GOLD_INGOT, IRON_INGOT
 
 BLOCKS = {
-    GRASS: {"name": "Grass", "texture": "grass.png", "solid": True, "drop_id": DIRT},
-    DIRT: {"name": "Dirt", "texture": "dirt.png", "solid": True},
-    STONE: {"name": "Stone", "texture": "stone.png", "solid": True, "hardness": 2, "drop_id": COBBLESTONE},
-    SAND: {"name": "Sand", "texture": "sand.png", "solid": True},
-    # TODO_STUDENT (⭐⭐): Sand erweitern, z. B. mit Fallverhalten in der Physik.
-    BEDROCK: {"name": "Bedrock", "texture": "bedrock.png", "solid": True, "hardness": float("inf")},
-    OAK: {"name": "Oak", "texture": "oak.png", "solid": True, "skylight_surface": False},
+    GRASS: {"name": "Grass", "texture": "grass.png", "solid": True, "drop_id": DIRT, "falling": False},
+    DIRT: {"name": "Dirt", "texture": "dirt.png", "solid": True, "falling": False},
+    STONE: {"name": "Stone", "texture": "stone.png", "solid": True, "hardness": 2, "drop_id": COBBLESTONE, "falling": False},
+    SAND: {"name": "Sand", "texture": "sand.png", "solid": True, "falling": True},
+    BEDROCK: {"name": "Bedrock", "texture": "bedrock.png", "solid": True, "hardness": float("inf"), "falling": False},
+    OAK: {"name": "Oak", "texture": "oak.png", "solid": False, "skylight_surface": False, "falling": False},
     LEAVES: {
         "name": "Leaves",
         "texture": "leaves.png",
         "solid": False,
         "light_opacity": 0.18,
         "skylight_surface": False,
+        "falling": False,
     },
-    COAL_ORE: {"name": "Coal Ore", "texture": "coal_ore.png", "solid": True, "hardness": 2.2, "drop_id": CHARCOAL},
-    IRON_ORE: {"name": "Iron Ore", "texture": "iron_ore.png", "solid": True, "hardness": 2.4, "drop_id": IRON_INGOT},
-    GOLD_ORE: {"name": "Gold Ore", "texture": "gold_ore.png", "solid": True, "hardness": 2.6, "drop_id": GOLD_INGOT},
-    DIAMOND_ORE: {"name": "Diamond Ore", "texture": "diamond_ore.png", "solid": True, "hardness": 3.0, "drop_id": DIAMOND},
-    OAK_PLANKS: {"name": "Oak Planks", "texture": "planks_oak.png", "solid": True},
-    COBBLESTONE: {"name": "Cobblestone", "texture": "cobblestone.png", "solid": True, "hardness": 2.0}
+    COAL_ORE: {"name": "Coal Ore", "texture": "coal_ore.png", "solid": True, "hardness": 2.2, "drop_id": CHARCOAL, "falling": False},
+    IRON_ORE: {"name": "Iron Ore", "texture": "iron_ore.png", "solid": True, "hardness": 2.4, "drop_id": IRON_INGOT, "falling": False},
+    GOLD_ORE: {"name": "Gold Ore", "texture": "gold_ore.png", "solid": True, "hardness": 2.6, "drop_id": GOLD_INGOT, "falling": False},
+    DIAMOND_ORE: {"name": "Diamond Ore", "texture": "diamond_ore.png", "solid": True, "hardness": 3.0, "drop_id": DIAMOND, "falling": False},
+    OAK_PLANKS: {"name": "Oak Planks", "texture": "planks_oak.png", "solid": True, "falling": False},
+    COBBLESTONE: {"name": "Cobblestone", "texture": "cobblestone.png", "solid": True, "hardness": 2.0, "falling": False},
 }
 
 
@@ -78,6 +79,14 @@ def is_block_solid(block_id: int) -> bool:
     if block_definition is None:
         return False
     return bool(block_definition.get("solid", True))
+
+
+def is_block_falling(block_id: int) -> bool:
+    """True, wenn ein Block aufgrund der Schwerkraft fällt."""
+    block_definition = BLOCKS.get(block_id)
+    if block_definition is None:
+        return False
+    return bool(block_definition.get("falling", False))
 
 
 def get_block_light_opacity(block_id: int) -> float:

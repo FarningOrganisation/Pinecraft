@@ -703,6 +703,7 @@ class GameWindow(arcade.Window):
         elif not was_on_ground and self.player.on_ground:
             self.player.apply_fall_damage()
         self.player.update(physics_delta)
+        self.world.update(physics_delta, center_x=self.player.center_x, center_y=self.player.center_y, player=self.player)
 
         for drop_id, tile_x, tile_y in self.player.consume_pending_item_drops():
             self._spawn_dropped_item(drop_id, tile_x, tile_y)

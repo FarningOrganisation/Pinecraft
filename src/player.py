@@ -11,7 +11,7 @@ import arcade
 
 from animated_sprite import AnimatedSprite
 from blocks import (
-    AIR, DIRT, GRASS, OAK, STONE,
+    AIR, DIRT, GRASS, OAK, STONE, SAND,
     get_block_drop_id, 
     get_block_hardness, 
     is_block_breakable, 
@@ -85,7 +85,7 @@ class Player(AnimatedSprite):
         self.state = self.current_state
         self.scale_x = 1.0
         self.scale_y = 1.0
-        self.inventory = Inventory({GRASS: 12, DIRT: 12, STONE: 12})
+        self.inventory = Inventory({GRASS: 12, DIRT: 12, STONE: 12, SAND: 12})
         hotbar_start = self.inventory.HOTBAR_START
         self.inventory.slots[hotbar_start + 0].item = STONE_PICKAXE
         self.inventory.slots[hotbar_start + 0].count = 1
@@ -101,6 +101,7 @@ class Player(AnimatedSprite):
         self.selected_hotbar_slot = 0
         self.max_health = 8
         self.health = self.max_health
+        self.invincibility_timer = 0.0
         self.held_item_size = 16
         self.attack_hitbox_width = 56.0
         self.attack_hitbox_height = 34.0
@@ -254,6 +255,21 @@ class Player(AnimatedSprite):
         self.attack_animation.reset()
         self.attack_hit_targets.clear()
 
+    def take_damage(self, amount: int) -> bool:
+        """Offizielle Schadensmethode des Spielers; schützt kurzzeitig vor erneutem Schaden."""
+        if amount <= 0:
+            return False
+        if self.invincibility_timer > 0.0:
+            return False
+
+        self.health = max(0, self.health - amount)
+        self.invincibility_timer = 0.65
+        return True
+
+    def apply_damage(self, amount: int) -> bool:
+        """Alias für take_damage() für bestehende Aufrufer."""
+        return self.take_damage(amount)
+
     def apply_fall_damage(self):
         """Wendet Fallschaden nach der Landung an."""
         fall_distance = max(0.0, self._fall_reference_y - self.center_y)
@@ -263,7 +279,7 @@ class Player(AnimatedSprite):
             return 0
 
         damage = math.ceil((fall_blocks - 8.0) / 3.0)
-        self.health = max(0, self.health - damage)
+        self.apply_damage(damage)
         self._fall_reference_y = self.center_y
         return damage
 
@@ -544,12 +560,14 @@ class Player(AnimatedSprite):
         if place_target is None or selected_entry is None or self.inventory.get_item_count(selected_entry) <= 0:
             return False
 
-        support_y = tile_y - 1
-        if support_y < 0:
-            return False
-        support_id = world.get_block(tile_x, support_y)
-        if support_id == AIR or not is_block_solid(support_id):
-            return False
+        for ny, nx in ((-1, 0), (1, 0), (0, 1), (0, -1)):
+            support_x = tile_x - nx
+            support_y = tile_y - ny
+            if support_y < 0:
+                return False
+            support_id = world.get_block(support_x, support_y)
+            if support_id == AIR or not is_block_solid(support_id):
+                return False
 
         block_center_x, block_center_y = world.to_world_position(tile_x, tile_y)
         block_left = block_center_x - TILE_SIZE / 2
@@ -601,6 +619,8 @@ class Player(AnimatedSprite):
 
     def update(self, delta_time: float):
         """Aktualisiert nur die Animation und löst fertige Mining-Vorgänge selbst aus."""
+        self.invincibility_timer = max(0.0, self.invincibility_timer - delta_time)
+
         if self.is_mining:
             self.mining_animation.update(delta_time)
             if self.mining_animation.has_finished:

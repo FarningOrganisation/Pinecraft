@@ -304,8 +304,8 @@ class Monster(Mob):
         dx = abs(player.center_x - self.center_x)
         dy = abs(player.center_y - self.center_y)
         if dx < (player.width * 0.65 + self.width * 0.65) and dy < (player.height * 0.65 + self.height * 0.65):
-            if hasattr(player, "health"):
-                player.health = max(0, player.health - self.damage)
+            if hasattr(player, "take_damage"):
+                player.take_damage(self.damage)
             self.contact_cooldown = 1.0
 
 
