@@ -143,12 +143,24 @@ class LightingSystem:
                 return False
         return True
 
+    def _column_top_occluder_y(self, tile_x: int) -> int:
+        """Oberste lichtblockierende Tile in einer Spalte; -1 falls nach oben offen."""
+        for y in range(WORLD_HEIGHT - 1, -1, -1):
+            block_id = self.window.world.get_block(tile_x, y, generate_if_missing=False)
+            if get_block_light_opacity(block_id) > 0.0:
+                return y
+        return -1
+
     def sky_background_blend(self) -> float:
         """0 = normale Sky-Farbe, 1 = tiefe Höhle; Abstand zur nächsten Open-Air-Säule bestimmt den Übergang."""
         player_tile_x = int(self.window.player.center_x // TILE_SIZE)
         player_tile_y = int(self.window.player.center_y // TILE_SIZE)
         search_radius = 12
         nearest_sky_distance = float("inf")
+
+        top_occluder_by_x: dict[int, int] = {}
+        for tile_x in range(player_tile_x - search_radius, player_tile_x + search_radius + 1):
+            top_occluder_by_x[tile_x] = self._column_top_occluder_y(tile_x)
 
         for ox in range(-search_radius, search_radius + 1):
             for oy in range(-search_radius, search_radius + 1):
@@ -158,7 +170,7 @@ class LightingSystem:
                     continue
                 if self.window.world.get_block(tile_x, tile_y, generate_if_missing=False) != AIR:
                     continue
-                if not self.is_sky_lit_air(tile_x, tile_y, max_scan=18):
+                if tile_y <= top_occluder_by_x.get(tile_x, -1):
                     continue
                 dist = math.hypot(ox, oy)
                 if dist < nearest_sky_distance:
@@ -248,18 +260,16 @@ class LightingSystem:
         sky_light: dict[tuple[int, int], float] = {}
         queue: deque[tuple[tuple[int, int], float]] = deque()
 
+        top_occluder_by_x: dict[int, int] = {}
+        for tile_x in range(min_tile_x, max_tile_x + 1):
+            top_occluder_by_x[tile_x] = self._column_top_occluder_y(tile_x)
+
         for tile_x in range(min_tile_x, max_tile_x + 1):
             for tile_y in range(min_tile_y, max_tile_y + 1):
                 if self.window.world.get_block(tile_x, tile_y, generate_if_missing=False) != AIR:
                     continue
 
-                sky_clear = True
-                for check_y in range(tile_y + 1, min(max_tile_y + 8, WORLD_HEIGHT)):
-                    if self.window.world.get_block(tile_x, check_y, generate_if_missing=False) != AIR:
-                        sky_clear = False
-                        break
-
-                if sky_clear:
+                if tile_y > top_occluder_by_x.get(tile_x, -1):
                     cell = (tile_x, tile_y)
                     sky_light[cell] = 1.0
                     queue.append((cell, 1.0))
@@ -431,15 +441,13 @@ class LightingSystem:
         if self.window.camera.position[1] < sea_level_world_y - CELESTIAL_HIDE_BELOW_SEA_TILES * TILE_SIZE:
             return
 
-        sea_level_screen_y = sea_level_world_y - self.window.camera.position[1] + self.window.height / 2
-        if sea_level_screen_y < -0.25 * self.window.height or sea_level_screen_y > 1.25 * self.window.height:
-            return
-
         def celestial_position(progress: float) -> tuple[float, float]:
             p = max(0.0, min(1.0, progress))
             theta = math.pi * p
             center_x = self.window.width * 0.5
-            center_y = sea_level_screen_y
+            # Fixe Bildschirmbahn: Sonne/Mond bleiben visuell stationär,
+            # unabhängig von der vertikalen Kameraposition.
+            center_y = self.window.height * 0.12
             radius_x = self.window.width * 0.62
             radius_y = self.window.height * 0.64
             x = center_x + radius_x * math.cos(theta)
