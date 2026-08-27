@@ -13,7 +13,7 @@ import arcade
 from arcade.gl import geometry as gl_geometry
 from arcade.future.light import Light, LightLayer
 
-from blocks import AIR, BLOCK_TEXTURES, get_block_light_opacity, is_block_skylight_surface
+from blocks import AIR, BLOCK_TEXTURES, get_block_light_opacity, is_block_skylight_surface, is_block_solid
 from dropped_item import DroppedItem
 from items import ITEM_TEXTURES, TORCH
 from mobs.mob_spawning import spawn_mob_at, spawn_mob_next_to_player
@@ -41,7 +41,7 @@ from settings import (
     WORLD_HEIGHT,
 )
 from world import World, world_to_chunk_and_local
-from world_generation import build_chunk_sprite_list
+from world_generation import build_chunk_sprite_list, build_chunk_water_sprite_list
 
 # Choose the mob type spawned via the debug key from here instead of scrolling down.
 DEBUG_SPAWN_MOB_CLASS = Zombie
@@ -70,6 +70,7 @@ class GameWindow(arcade.Window):
         self.inventory_ui = InventoryUI(self.player, SCREEN_WIDTH, SCREEN_HEIGHT)
         self.chunk_sprite_lists: dict[int, arcade.SpriteList] = {}
         self.chunk_sprite_maps: dict[int, dict[tuple[int, int], arcade.Sprite]] = {}
+        self.water_sprite_list = arcade.SpriteList()
         self.camera = arcade.Camera2D()
         self.ui_camera = arcade.Camera2D()
         self.physics = AABBPhysics(self.world)
@@ -103,6 +104,8 @@ class GameWindow(arcade.Window):
         self.render_buffer_tiles = 24
         self.left_pressed = False
         self.right_pressed = False
+        self.left_mouse_held = False
+        self.left_mouse_mining_chain = False
         self.mouse_screen_x = 0.0
         self.mouse_screen_y = 0.0
         self.break_range = 3.5 * TILE_SIZE
@@ -501,15 +504,20 @@ class GameWindow(arcade.Window):
         return self.player.center_x, camera_y
 
     def _rebuild_world_sprites(self):
-        """Erzeugt den Chunk-Sprite-Cache für den aktuellen Sichtbereich neu."""
+        """Erzeugt den Block- und Wasser-Sprite-Cache für den aktuellen Sichtbereich neu."""
         min_tile_y, max_tile_y = self._get_target_render_tile_range()
         self.chunk_sprite_lists = {}
         self.chunk_sprite_maps = {}
+        self.water_sprite_list = arcade.SpriteList()
         for chunk_x in sorted(self.world.chunks):
             chunk = self.world.chunks[chunk_x]
             sprite_list, sprite_map = build_chunk_sprite_list(chunk_x, chunk, min_tile_y, max_tile_y)
             self.chunk_sprite_lists[chunk_x] = sprite_list
             self.chunk_sprite_maps[chunk_x] = sprite_map
+
+            water_sprites = build_chunk_water_sprite_list(chunk_x, chunk, min_tile_y, max_tile_y)
+            for sprite in water_sprites:
+                self.water_sprite_list.append(sprite)
         self.render_tile_range = (min_tile_y, max_tile_y)
 
     def _get_visible_tile_range(self, margin_tiles: int | None = None) -> tuple[int, int]:
@@ -562,6 +570,10 @@ class GameWindow(arcade.Window):
             sprite_list, sprite_map = build_chunk_sprite_list(chunk_x, chunk, min_tile_y, max_tile_y)
             self.chunk_sprite_lists[chunk_x] = sprite_list
             self.chunk_sprite_maps[chunk_x] = sprite_map
+
+            water_sprites = build_chunk_water_sprite_list(chunk_x, chunk, min_tile_y, max_tile_y)
+            for sprite in water_sprites:
+                self.water_sprite_list.append(sprite)
 
     def _apply_world_block_diffs(self, changes: list[tuple[int, int, int, int]]):
         """Aktualisiert Sprites einzelner geänderter Blöcke ohne Chunk-Rebuild."""
@@ -712,6 +724,21 @@ class GameWindow(arcade.Window):
             self._spawn_dropped_item(drop_id, tile_x, tile_y)
         self._update_dropped_items(physics_delta)
 
+        if self.left_mouse_held and self.left_mouse_mining_chain and not self.inventory_ui.visible:
+            target = self._get_block_from_mouse(self.mouse_screen_x, self.mouse_screen_y)
+            if target is None:
+                if self.player.is_mining:
+                    self.player.cancel_mining()
+            else:
+                tile_x, tile_y, _ = target
+                target_pos = (tile_x, tile_y)
+                if self.player.is_mining:
+                    if self.player.mining_target != target_pos:
+                        self.player.cancel_mining()
+                        self.player.start_mining(target_pos)
+                else:
+                    self.player.start_mining(target_pos)
+
         if self.player.mining_target is not None:
             tile_x, tile_y = self.player.mining_target
             world_x, world_y = self.world.to_world_position(tile_x, tile_y)
@@ -740,6 +767,10 @@ class GameWindow(arcade.Window):
         block_changes = self.world.consume_changed_blocks()
         if block_changes and not did_full_rebuild:
             self._apply_world_block_diffs(block_changes)
+
+        water_changes = self.world.consume_changed_water()
+        if water_changes and not did_full_rebuild:
+            self._rebuild_world_sprites()
 
         if self.player.world_dirty:
             self.player.world_dirty = False
@@ -906,6 +937,7 @@ class GameWindow(arcade.Window):
             self.player_sprite_list.draw()
             self.player.draw_held_item(layer="front")
             self.mining_sprite_list.draw()
+            self.water_sprite_list.draw()
             self._draw_underground_darkness_overlay()
 
         self.light_layer.draw(ambient_color=self._ambient_color())
@@ -919,6 +951,32 @@ class GameWindow(arcade.Window):
 
         if self.game_over:
             self._draw_game_over_overlay()
+
+    def _place_water_at_mouse_cursor(self):
+        """Platziert ein volles Wasser-Volume im nächsten freien Luft-Block unter der Maus."""
+        if self.mouse_screen_x is None or self.mouse_screen_y is None:
+            return None
+
+        world_x, world_y = self._screen_to_world(self.mouse_screen_x, self.mouse_screen_y)
+        tile_x, tile_y = self.world.to_block_position(world_x, world_y)
+
+        target_x = tile_x
+        target_y = tile_y
+        block_at_cursor = self.world.get_block(tile_x, tile_y, generate_if_missing=False)
+        if block_at_cursor != AIR and is_block_solid(block_at_cursor):
+            target_y = None
+            for offset in range(1, 8):
+                candidate_y = tile_y + offset
+                candidate_block = self.world.get_block(tile_x, candidate_y, generate_if_missing=False)
+                if candidate_block == AIR or not is_block_solid(candidate_block):
+                    target_y = candidate_y
+                    break
+            if target_y is None:
+                return None
+
+        self.world.set_water(target_x, target_y, 1.0)
+        self._rebuild_world_sprites()
+        return target_x, target_y
 
     def on_key_press(self, symbol: int, modifiers: int):
         """Reagiert auf Tastatureingaben."""
@@ -975,7 +1033,16 @@ class GameWindow(arcade.Window):
         elif symbol in (arcade.key.D, arcade.key.RIGHT):
             self.right_pressed = True
             self.player.move_right()
+        elif symbol == arcade.key.Q:
+            if self.mouse_screen_x is not None and self.mouse_screen_y is not None:
+                tile_x, tile_y = self._place_water_at_mouse_cursor()
+                if tile_x is not None and tile_y is not None:
+                    return
         elif symbol == arcade.key.SPACE or symbol == arcade.key.UP or symbol == arcade.key.W:
+            if self.player.on_ground:
+                self.player.jump()
+        elif symbol == arcade.key.E:
+            self.inventory_ui.toggle()
             if self.player.on_ground:
                 self.player.jump()
         elif symbol == arcade.key.E:
@@ -1008,6 +1075,8 @@ class GameWindow(arcade.Window):
             return
 
         if button == arcade.MOUSE_BUTTON_LEFT:
+            self.left_mouse_held = True
+            self.left_mouse_mining_chain = False
             mob = self._mob_under_mouse(x, y)
             if mob is not None:
                 self.player.start_attack()
@@ -1029,6 +1098,7 @@ class GameWindow(arcade.Window):
 
             tile_x, tile_y, _ = target
             self.player.start_mining((tile_x, tile_y))
+            self.left_mouse_mining_chain = True
 
             return
 
@@ -1042,7 +1112,10 @@ class GameWindow(arcade.Window):
         self.mouse_screen_x = x
         self.mouse_screen_y = y
 
-        if self.player.is_mining:
+        if button == arcade.MOUSE_BUTTON_LEFT:
+            self.left_mouse_held = False
+            self.left_mouse_mining_chain = False
+            if self.player.is_mining:
                 self.player.cancel_mining()
 
     def on_mouse_motion(self, x: float, y: float, dx: float, dy: float):
