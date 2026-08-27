@@ -1,9 +1,10 @@
 import unittest
 
-from blocks import AIR, OAK, OAK_PLANKS
+from blocks import AIR, OAK, OAK_PLANKS, STONE
 from crafting_recipes import CRAFTING_RECIPES
 from crafting import find_matching_recipe
 from items import STICK
+
 
 
 class CraftingDetectionTests(unittest.TestCase):
@@ -26,6 +27,7 @@ class CraftingDetectionTests(unittest.TestCase):
 
         result_item, _, _, _ = find_matching_recipe(grid, CRAFTING_RECIPES)
         self.assertEqual(result_item, STICK)
+
 
 
 if __name__ == "__main__":

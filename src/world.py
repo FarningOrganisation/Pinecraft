@@ -10,9 +10,10 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from blocks import AIR, SAND, is_block_falling, is_block_solid
+from blocks import AIR, SAND, is_block_falling, is_block_solid, is_block_water_passable
 from settings import WORLD_SEED
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
+from water import WATER_TICK_INTERVAL, WaterSystem
 
 
 def world_to_chunk_and_local(world_x: int) -> tuple[int, int]:
@@ -32,6 +33,7 @@ class Chunk:
     width: int = CHUNK_WIDTH
     height: int = WORLD_HEIGHT
     blocks: list[list[int]] = field(default_factory=list)
+    water: dict[tuple[int, int], float] = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.blocks:
@@ -48,6 +50,40 @@ class Chunk:
         if 0 <= local_x < self.width and 0 <= y < self.height:
             self.blocks[y][local_x] = block_id
 
+    def get_water(self, local_x: int, y: int) -> float:
+        """Liefert die Wasserfüllung an einer lokalen Chunk-Position oder 0.0."""
+        if 0 <= local_x < self.width and 0 <= y < self.height:
+            return float(self.water.get((local_x, y), 0.0))
+        return 0.0
+
+    def set_water(self, local_x: int, y: int, amount: float) -> float:
+        """Setzt den Wasserwert einer lokalen Chunk-Position und gibt ihn zurück."""
+        if not (0 <= local_x < self.width and 0 <= y < self.height):
+            return 0.0
+
+        value = max(0.0, min(1.0, float(amount)))
+        if value <= 0.0:
+            self.water.pop((local_x, y), None)
+            return 0.0
+
+        self.water[(local_x, y)] = value
+        return value
+
+    def add_water(self, local_x: int, y: int, amount: float) -> float:
+        """Erhöht die Wasserfüllung auf einer lokalen Chunk-Position."""
+        if not (0 <= local_x < self.width and 0 <= y < self.height):
+            return 0.0
+        current = self.get_water(local_x, y)
+        return self.set_water(local_x, y, current + amount)
+
+    def remove_water(self, local_x: int, y: int, amount: float) -> float:
+        """Reduziert die Wasserfüllung auf einer lokalen Chunk-Position."""
+        if not (0 <= local_x < self.width and 0 <= y < self.height):
+            return 0.0
+        current = self.get_water(local_x, y)
+        new_amount = max(0.0, current - amount)
+        return self.set_water(local_x, y, new_amount)
+
 
 class World:
     """Objekt, das den aktuellen Zustand der Welt verwaltet."""
@@ -57,11 +93,15 @@ class World:
         self.chunks: dict[int, Chunk] = {}
         self.placed_items: dict[tuple[int, int], int] = {}
         self.saved_chunk_blocks: dict[int, list[list[int]]] = {}
+        self.saved_chunk_water: dict[int, dict[tuple[int, int], float]] = {}
         self.pending_generated_blocks: dict[int, dict[tuple[int, int], int]] = {}
         self.changed_blocks: list[tuple[int, int, int, int]] = []
+        self.changed_water: list[tuple[int, int, float, float]] = []
         self.changed_placed_items: list[tuple[int, int, int | None, int | None]] = []
         self.load_radius = load_radius
         self.unload_radius = unload_radius
+        self.water_time_accumulator = 0.0
+        self.water_system = WaterSystem()
 
         if generator is None:
             from world_generation import WorldGenerator
@@ -84,6 +124,17 @@ class World:
     def save_chunk_blocks(self, chunk_x: int, blocks: list[list[int]]) -> None:
         """Speichert einen Snapshot der Chunk-Blöcke persistent im Speicher."""
         self.saved_chunk_blocks[chunk_x] = [row[:] for row in blocks]
+
+    def get_saved_chunk_water(self, chunk_x: int) -> dict[tuple[int, int], float] | None:
+        """Liefert gespeicherte Wasserwerte für einen Chunk, falls vorhanden."""
+        water = self.saved_chunk_water.get(chunk_x)
+        if water is None:
+            return None
+        return dict(water)
+
+    def save_chunk_water(self, chunk_x: int, water: dict[tuple[int, int], float]) -> None:
+        """Speichert einen Snapshot der Chunk-Wasserwerte persistent im Speicher."""
+        self.saved_chunk_water[chunk_x] = dict(water)
 
     def queue_generated_block(self, world_x: int, y: int, block_id: int) -> None:
         """Merkt Welt-Generierungsblöcke ohne Chunk-Generierung im aktuellen Frame."""
@@ -260,6 +311,11 @@ class World:
             self.update_loaded_chunks(center_x)
         self.update_falling_blocks(delta_time, center_x=center_x, player=player)
 
+        self.water_time_accumulator += delta_time
+        while self.water_time_accumulator >= WATER_TICK_INTERVAL:
+            self.water_system.update(self, WATER_TICK_INTERVAL)
+            self.water_time_accumulator -= WATER_TICK_INTERVAL
+
     def get_loaded_chunk_count(self) -> int:
         """Gibt die Anzahl der aktuell geladenen Chunks zurück."""
         return len(self.chunks)
@@ -280,6 +336,53 @@ class World:
         """Gibt die Oberkante des Bodens an einer Weltposition in Pixeln zurück."""
         height = self.get_surface_height(world_x)
         return (height + 1) * TILE_SIZE
+
+    def get_water(self, world_x: int, y: int) -> float:
+        """Gibt die Wasserfüllung an einer Weltposition zurück; 0.0 wenn kein Wasser vorhanden ist."""
+        if y < 0 or y >= WORLD_HEIGHT:
+            return 0.0
+
+        chunk_x, local_x = world_to_chunk_and_local(world_x)
+        chunk = self.chunks.get(chunk_x)
+        if chunk is not None:
+            return chunk.get_water(local_x, y)
+
+        saved_water = self.saved_chunk_water.get(chunk_x)
+        if saved_water is not None:
+            return float(saved_water.get((local_x, y), 0.0))
+        return 0.0
+
+    def set_water(self, world_x: int, y: int, amount: float) -> float:
+        """Setzt die Wasserfüllung an einer Weltposition und gibt den neuen Wert zurück."""
+        if y < 0 or y >= WORLD_HEIGHT:
+            return 0.0
+
+        old_value = self.get_water(world_x, y)
+        chunk_x, local_x = world_to_chunk_and_local(world_x)
+        chunk = self.chunks.get(chunk_x)
+        if chunk is None:
+            chunk = self.generate_chunk(chunk_x)
+        value = chunk.set_water(local_x, y, amount)
+        if value <= 0.0:
+            chunk.water.pop((local_x, y), None)
+        delta = abs(old_value - value)
+        if delta > 1e-12:
+            self.changed_water.append((world_x, y, old_value, value))
+
+        meaningful_change = delta >= self.water_system.min_flow
+        if meaningful_change:
+            self.water_system.activate_neighborhood(world_x, y)
+        return value
+
+    def add_water(self, world_x: int, y: int, amount: float) -> float:
+        """Erhöht die Wasserfüllung an einer Weltposition um den Betrag."""
+        current = self.get_water(world_x, y)
+        return self.set_water(world_x, y, current + amount)
+
+    def remove_water(self, world_x: int, y: int, amount: float) -> float:
+        """Reduziert die Wasserfüllung an einer Weltposition um den Betrag."""
+        current = self.get_water(world_x, y)
+        return self.set_water(world_x, y, current - amount)
 
     def get_block(self, world_x: int, y: int, generate_if_missing: bool = True) -> int:
         """Gibt einen Block an einer Weltposition zurück."""
@@ -307,6 +410,7 @@ class World:
             return
         chunk.set_block(local_x, y, block_id)
         self.changed_blocks.append((world_x, y, old_block_id, block_id))
+        self.water_system.activate_neighborhood(world_x, y)
 
     def consume_changed_blocks(self) -> list[tuple[int, int, int, int]]:
         """Liefert und leert die Liste geänderter Blöcke als (x, y, alt, neu)."""
@@ -314,6 +418,14 @@ class World:
             return []
         changes = self.changed_blocks
         self.changed_blocks = []
+        return changes
+
+    def consume_changed_water(self) -> list[tuple[int, int, float, float]]:
+        """Liefert und leert die Liste geänderter Wasserwerte als (x, y, alt, neu)."""
+        if not self.changed_water:
+            return []
+        changes = self.changed_water
+        self.changed_water = []
         return changes
 
     def break_block(self, world_x: int, y: int) -> int:

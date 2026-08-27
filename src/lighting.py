@@ -9,6 +9,9 @@ from arcade.gl import geometry as gl_geometry
 from blocks import AIR, get_block_light_opacity, is_block_skylight_surface
 from paths import textures_dir
 from settings import TILE_SIZE, WORLD_HEIGHT
+from world_generation import SEA_LEVEL
+
+CELESTIAL_HIDE_BELOW_SEA_TILES = 10
 
 
 class LightingSystem:
@@ -424,9 +427,28 @@ class LightingSystem:
         if self.sky_background_blend() > 0.65:
             return
 
+        sea_level_world_y = (SEA_LEVEL + 1.0) * TILE_SIZE
+        if self.window.camera.position[1] < sea_level_world_y - CELESTIAL_HIDE_BELOW_SEA_TILES * TILE_SIZE:
+            return
+
+        sea_level_screen_y = sea_level_world_y - self.window.camera.position[1] + self.window.height / 2
+        if sea_level_screen_y < -0.25 * self.window.height or sea_level_screen_y > 1.25 * self.window.height:
+            return
+
+        def celestial_position(progress: float) -> tuple[float, float]:
+            p = max(0.0, min(1.0, progress))
+            theta = math.pi * p
+            center_x = self.window.width * 0.5
+            center_y = sea_level_screen_y
+            radius_x = self.window.width * 0.62
+            radius_y = self.window.height * 0.64
+            x = center_x + radius_x * math.cos(theta)
+            y = center_y + radius_y * math.sin(theta)
+            return x, y
+
         sun_progress = (self.window.time_of_day - 0.25) / 0.5
         if 0.0 <= sun_progress <= 1.0:
-            sun_x, sun_y = self.window._celestial_position(sun_progress)
+            sun_x, sun_y = celestial_position(sun_progress)
             if self.sun_sprite is not None:
                 self.sun_sprite.center_x = sun_x
                 self.sun_sprite.center_y = sun_y
@@ -443,7 +465,7 @@ class LightingSystem:
             moon_progress = (self.window.time_of_day + 0.25) / 0.5
 
         if moon_progress is not None:
-            moon_x, moon_y = self.window._celestial_position(moon_progress)
+            moon_x, moon_y = celestial_position(moon_progress)
             self.draw_glow_orb(moon_x, moon_y, 26, (170, 208, 255), strength=0.78)
             if self.moon_sprite is not None:
                 self.moon_sprite.center_x = moon_x

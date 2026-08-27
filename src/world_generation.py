@@ -7,6 +7,7 @@ Die Welt-Daten selbst liegen in world.py.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import arcade
 
@@ -24,9 +25,18 @@ from blocks import (
     OAK,
     SAND,
     STONE,
+    is_block_water_passable,
 )
+from resource_manager import resource_manager
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
 from world import World, world_to_chunk_and_local
+
+WATER_TEXTURE = resource_manager.load_texture_in_textures(Path("blocks") / "water.png")
+WATER_VISUAL_STEPS = 8
+WATER_RENDER_THRESHOLD = 0.02
+SEA_LEVEL = 130
+UNDERGROUND_WATER_MAX_Y = 102
+COASTAL_BEACH_BAND = 2
 
 
 class WorldGenerator:
@@ -254,6 +264,17 @@ class WorldGenerator:
         value = (world_x * 83492791 + self.seed * 2971215073) & 0xFFFFFFFF
         return 4 + (value % 3)
 
+    def _is_ocean_column(self, world_x: int, surface_y: int) -> bool:
+        """Deterministisch seltenere Ozeanspalten unterhalb des Meeresspiegels."""
+        if surface_y >= SEA_LEVEL:
+            return False
+
+        biome = self._biome_value(world_x)
+        ocean_mask = self._value_noise_2d(world_x, SEA_LEVEL, cell_size=140, salt=1601)
+        depth = min(1.0, max(0.0, (SEA_LEVEL - surface_y) / 12.0))
+        threshold = 0.78 - 0.22 * depth
+        return biome < -0.18 and ocean_mask > threshold
+
     def generate_chunk(self, world: World, chunk_x: int):
         """Erzeugt einen deterministischen Chunk für eine gegebene Chunk-Koordinate."""
         if chunk_x in world.chunks:
@@ -263,7 +284,8 @@ class WorldGenerator:
 
         saved_blocks = world.get_saved_chunk_blocks(chunk_x)
         if saved_blocks is not None:
-            chunk = Chunk(chunk_x=chunk_x, blocks=saved_blocks)
+            saved_water = world.get_saved_chunk_water(chunk_x) or {}
+            chunk = Chunk(chunk_x=chunk_x, blocks=saved_blocks, water=dict(saved_water))
             world.apply_pending_generated_blocks(chunk)
             world.chunks[chunk_x] = chunk
             return chunk
@@ -288,12 +310,17 @@ class WorldGenerator:
 
             world.queue_generated_block(world_x, y, block_id)
         surface_heights: list[int] = [0] * chunk.width
+        ocean_columns: list[bool] = [False] * chunk.width
 
         # Pass 1: Basis-Terrain fuer alle Spalten aufbauen.
         for local_x in range(chunk.width):
             height = self.terrain_height(chunk_x, local_x)
             surface_heights[local_x] = height
             world_x = chunk_x * CHUNK_WIDTH + local_x
+            is_ocean = self._is_ocean_column(world_x, height)
+            ocean_columns[local_x] = is_ocean
+            is_coastal_band = SEA_LEVEL <= height <= SEA_LEVEL + COASTAL_BEACH_BAND
+            coastal_sand_bias = self._rand01(world_x, salt=1231)
             for y in range(chunk.height):
                 if y == 0:
                     block_id = BEDROCK
@@ -301,11 +328,21 @@ class WorldGenerator:
                     if self._is_cave_air(world_x, y, height):
                         block_id = AIR
                     else:
-                        block_id = self._pick_underground_block(world_x, y, height)
+                        if is_ocean and y >= height - 4:
+                            block_id = SAND
+                        elif is_coastal_band and y >= height - 3 and coastal_sand_bias < 0.45:
+                            block_id = SAND
+                        else:
+                            block_id = self._pick_underground_block(world_x, y, height)
                 elif y < height:
-                    block_id = DIRT
+                    if is_ocean:
+                        block_id = SAND
+                    elif is_coastal_band and y >= height - 1 and coastal_sand_bias < 0.62:
+                        block_id = SAND
+                    else:
+                        block_id = DIRT
                 elif y == height:
-                    block_id = GRASS
+                    block_id = SAND if (is_ocean or (is_coastal_band and coastal_sand_bias < 0.74)) else GRASS
                 else:
                     block_id = AIR
                 chunk.set_block(local_x, y, block_id)
@@ -374,6 +411,10 @@ class WorldGenerator:
         for local_x in range(chunk.width):
             height = surface_heights[local_x]
             world_x = chunk_x * CHUNK_WIDTH + local_x
+            if height < SEA_LEVEL:
+                continue
+            if chunk.get_block(local_x, height) != GRASS:
+                continue
             if not self._has_tree(world_x):
                 continue
 
@@ -434,6 +475,32 @@ class WorldGenerator:
                 side = -1 if self._rand01(world_x, salt=97) < 0.5 else 1
                 place_generated(world_x + side, top_leaf_y, LEAVES, replace_air_only=True)
 
+        # Pass 4: Natuerliches Wasser (Meeresspiegel + unterirdische Wasserbecken).
+        for local_x in range(chunk.width):
+            surface_y = surface_heights[local_x]
+            world_x = chunk_x * CHUNK_WIDTH + local_x
+
+            if ocean_columns[local_x]:
+                for y in range(surface_y + 1, min(SEA_LEVEL, WORLD_HEIGHT - 1) + 1):
+                    if chunk.get_block(local_x, y) == AIR:
+                        chunk.set_water(local_x, y, 1.0)
+
+            for y in range(4, min(UNDERGROUND_WATER_MAX_Y, WORLD_HEIGHT - 2) + 1):
+                if chunk.get_block(local_x, y) != AIR:
+                    continue
+                if chunk.get_water(local_x, y) > 0.0:
+                    continue
+
+                below_block = chunk.get_block(local_x, y - 1)
+                above_block = chunk.get_block(local_x, y + 1)
+                if below_block == AIR or above_block == AIR:
+                    continue
+
+                cave_signal = self._value_noise_2d(world_x, y, cell_size=10, salt=1181)
+                pocket_signal = self._value_noise_2d(world_x, y, cell_size=22, salt=1193)
+                if cave_signal > 0.71 and pocket_signal > 0.62:
+                    chunk.set_water(local_x, y, 1.0)
+
         world.apply_pending_generated_blocks(chunk)
         world.chunks[chunk_x] = chunk
         return chunk
@@ -462,9 +529,14 @@ class WorldGenerator:
             unload_candidates = unload_candidates[: max(0, max_unloads)]
 
         for chunk_x in unload_candidates:
-            world.save_chunk_blocks(chunk_x, world.chunks[chunk_x].blocks)
+            chunk = world.chunks[chunk_x]
+            world.save_chunk_blocks(chunk_x, chunk.blocks)
+            world.save_chunk_water(chunk_x, chunk.water)
             del world.chunks[chunk_x]
             unloaded_chunks.append(chunk_x)
+
+        if unloaded_chunks:
+            world.water_system.deactivate_unloaded_chunks(set(world.chunks.keys()))
 
         load_candidates = [chunk_x for chunk_x in range(min_chunk_x, max_chunk_x + 1) if chunk_x not in world.chunks]
         load_candidates.sort(key=lambda cx: abs(cx - current_chunk_x))
@@ -474,6 +546,7 @@ class WorldGenerator:
         for chunk_x in load_candidates:
             self.generate_chunk(world, chunk_x)
             loaded_chunks.append(chunk_x)
+            world.water_system.activate_loaded_chunk_water(world, chunk_x)
 
         return loaded_chunks, unloaded_chunks
 
@@ -513,8 +586,17 @@ def build_world_sprite_list(
     return sprite_list
 
 
+def get_water_render_height(level: float) -> float:
+    """Returns quantized visible water height, with a separate rendering threshold."""
+    normalized = max(0.0, min(1.0, float(level)))
+    if normalized < WATER_RENDER_THRESHOLD:
+        return 0.0
+    visual_level = min(WATER_VISUAL_STEPS, max(1, math.ceil(normalized * WATER_VISUAL_STEPS)))
+    return TILE_SIZE * (visual_level / WATER_VISUAL_STEPS)
+
+
 def build_chunk_sprite_list(chunk_x: int, chunk, min_tile_y: int, max_tile_y: int):
-    """Erstellt Sprites und Sprite-Index für einen Chunk im Y-Bereich."""
+    """Erstellt nur feste Block-Sprites; Wasser wird separat als Overlay gerendert."""
     sprite_list = arcade.SpriteList()
     sprite_map: dict[tuple[int, int], arcade.Sprite] = {}
     min_y = max(0, min_tile_y)
@@ -537,4 +619,43 @@ def build_chunk_sprite_list(chunk_x: int, chunk, min_tile_y: int, max_tile_y: in
             sprite_map[(local_x, y)] = sprite
 
     return sprite_list, sprite_map
+
+
+def build_chunk_water_sprite_list(chunk_x: int, chunk, min_tile_y: int, max_tile_y: int, include_map: bool = False):
+    """Erstellt die Wasser-Overlay-Sprites für die sichtbare Welt."""
+    sprite_list = arcade.SpriteList()
+    sprite_map: dict[tuple[int, int], arcade.Sprite] = {}
+    min_y = max(0, min_tile_y)
+    max_y = min(chunk.height - 1, max_tile_y)
+    if min_y > max_y:
+        if include_map:
+            return sprite_list, sprite_map
+        return sprite_list
+
+    for (local_x, y), level in sorted(chunk.water.items()):
+        if y < min_y or y > max_y:
+            continue
+
+        block_id = chunk.get_block(local_x, y)
+        if block_id != AIR and not is_block_water_passable(block_id):
+            continue
+
+        normalized = max(0.0, min(1.0, float(level)))
+        height = get_water_render_height(normalized)
+        if height <= 0.0:
+            continue
+
+        sprite = arcade.Sprite(WATER_TEXTURE)
+        sprite.color = (120, 170, 255)
+        sprite.alpha = 128
+        sprite.width = TILE_SIZE
+        sprite.height = height
+        sprite.center_x = (chunk_x * CHUNK_WIDTH + local_x + 0.5) * TILE_SIZE
+        sprite.center_y = (y + (height / TILE_SIZE) / 2.0) * TILE_SIZE
+        sprite_list.append(sprite)
+        sprite_map[(local_x, y)] = sprite
+
+    if include_map:
+        return sprite_list, sprite_map
+    return sprite_list
 

@@ -83,6 +83,16 @@ def is_block_solid(block_id: int) -> bool:
     return bool(block_definition.get("solid", True))
 
 
+def is_block_water_passable(block_id: int) -> bool:
+    """True, wenn Wasser diese Tile als offenen Bereich behandeln darf."""
+    if block_id == AIR:
+        return True
+    block_definition = BLOCKS.get(block_id)
+    if block_definition is None:
+        return False
+    return not bool(block_definition.get("solid", True))
+
+
 def is_block_falling(block_id: int) -> bool:
     """True, wenn ein Block aufgrund der Schwerkraft fällt."""
     block_definition = BLOCKS.get(block_id)

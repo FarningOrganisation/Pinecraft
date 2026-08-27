@@ -41,7 +41,13 @@ from settings import (
     WORLD_HEIGHT,
 )
 from world import World, world_to_chunk_and_local
-from world_generation import build_chunk_sprite_list, build_chunk_water_sprite_list
+from world_generation import (
+    WATER_RENDER_THRESHOLD,
+    WATER_TEXTURE,
+    build_chunk_sprite_list,
+    build_chunk_water_sprite_list,
+    get_water_render_height,
+)
 
 # Choose the mob type spawned via the debug key from here instead of scrolling down.
 DEBUG_SPAWN_MOB_CLASS = Zombie
@@ -71,6 +77,8 @@ class GameWindow(arcade.Window):
         self.chunk_sprite_lists: dict[int, arcade.SpriteList] = {}
         self.chunk_sprite_maps: dict[int, dict[tuple[int, int], arcade.Sprite]] = {}
         self.water_sprite_list = arcade.SpriteList()
+        self.water_sprite_maps: dict[int, dict[tuple[int, int], arcade.Sprite]] = {}
+        self._debug_logged_tiny_edge_cells: set[tuple[int, int]] = set()
         self.camera = arcade.Camera2D()
         self.ui_camera = arcade.Camera2D()
         self.physics = AABBPhysics(self.world)
@@ -509,15 +517,23 @@ class GameWindow(arcade.Window):
         self.chunk_sprite_lists = {}
         self.chunk_sprite_maps = {}
         self.water_sprite_list = arcade.SpriteList()
+        self.water_sprite_maps = {}
         for chunk_x in sorted(self.world.chunks):
             chunk = self.world.chunks[chunk_x]
             sprite_list, sprite_map = build_chunk_sprite_list(chunk_x, chunk, min_tile_y, max_tile_y)
             self.chunk_sprite_lists[chunk_x] = sprite_list
             self.chunk_sprite_maps[chunk_x] = sprite_map
 
-            water_sprites = build_chunk_water_sprite_list(chunk_x, chunk, min_tile_y, max_tile_y)
+            water_sprites, water_map = build_chunk_water_sprite_list(
+                chunk_x,
+                chunk,
+                min_tile_y,
+                max_tile_y,
+                include_map=True,
+            )
             for sprite in water_sprites:
                 self.water_sprite_list.append(sprite)
+            self.water_sprite_maps[chunk_x] = water_map
         self.render_tile_range = (min_tile_y, max_tile_y)
 
     def _get_visible_tile_range(self, margin_tiles: int | None = None) -> tuple[int, int]:
@@ -553,6 +569,10 @@ class GameWindow(arcade.Window):
         for chunk_x in unloaded_chunks:
             self.chunk_sprite_lists.pop(chunk_x, None)
             self.chunk_sprite_maps.pop(chunk_x, None)
+            removed_water = self.water_sprite_maps.pop(chunk_x, None)
+            if removed_water is not None:
+                for sprite in removed_water.values():
+                    self.water_sprite_list.remove(sprite)
 
         if not loaded_chunks:
             return
@@ -571,9 +591,93 @@ class GameWindow(arcade.Window):
             self.chunk_sprite_lists[chunk_x] = sprite_list
             self.chunk_sprite_maps[chunk_x] = sprite_map
 
-            water_sprites = build_chunk_water_sprite_list(chunk_x, chunk, min_tile_y, max_tile_y)
+            old_water = self.water_sprite_maps.pop(chunk_x, None)
+            if old_water is not None:
+                for sprite in old_water.values():
+                    self.water_sprite_list.remove(sprite)
+
+            water_sprites, water_map = build_chunk_water_sprite_list(
+                chunk_x,
+                chunk,
+                min_tile_y,
+                max_tile_y,
+                include_map=True,
+            )
             for sprite in water_sprites:
                 self.water_sprite_list.append(sprite)
+            self.water_sprite_maps[chunk_x] = water_map
+
+    def _apply_world_water_diffs(self, changes: list[tuple[int, int, float, float]]):
+        """Aktualisiert Wasser-Sprites gezielt pro geänderter Zelle statt Voll-Rebuild."""
+        if not changes:
+            return
+
+        if self.render_tile_range is None:
+            min_tile_y, max_tile_y = self._get_target_render_tile_range()
+            self.render_tile_range = (min_tile_y, max_tile_y)
+        else:
+            min_tile_y, max_tile_y = self.render_tile_range
+
+        for tile_x, tile_y, _old_value, new_value in changes:
+            chunk_x, local_x = world_to_chunk_and_local(tile_x)
+            chunk = self.world.chunks.get(chunk_x)
+            if chunk is None:
+                continue
+
+            chunk_water_map = self.water_sprite_maps.setdefault(chunk_x, {})
+            key = (local_x, tile_y)
+            existing_sprite = chunk_water_map.get(key)
+
+            in_visible_band = min_tile_y <= tile_y <= max_tile_y
+            block_id = chunk.get_block(local_x, tile_y)
+            block_open_for_water = block_id == AIR or not is_block_solid(block_id)
+            normalized = max(0.0, min(1.0, float(new_value)))
+            target_height = get_water_render_height(normalized)
+            should_render = in_visible_band and block_open_for_water and target_height > 0.0
+
+            if 0.0 < normalized < WATER_RENDER_THRESHOLD:
+                below_block_id = self.world.get_block(tile_x, tile_y - 1, generate_if_missing=False)
+                below_open_for_water = below_block_id == AIR or not is_block_solid(below_block_id)
+                if below_open_for_water:
+                    debug_key = (tile_x, tile_y)
+                    if debug_key not in self._debug_logged_tiny_edge_cells:
+                        print(
+                            "[water-edge-debug] cell="
+                            f"({tile_x},{tile_y}) water={normalized:.12f} "
+                            f"render_threshold={WATER_RENDER_THRESHOLD:.3f} "
+                            f"below_block={below_block_id}"
+                        )
+                        self._debug_logged_tiny_edge_cells.add(debug_key)
+
+            if not should_render:
+                if existing_sprite is not None:
+                    self.water_sprite_list.remove(existing_sprite)
+                    chunk_water_map.pop(key, None)
+                continue
+
+            target_center_x = (tile_x + 0.5) * TILE_SIZE
+            target_center_y = (tile_y + (target_height / TILE_SIZE) / 2.0) * TILE_SIZE
+            target_alpha = 128
+
+            if existing_sprite is not None:
+                existing_sprite.width = TILE_SIZE
+                existing_sprite.height = target_height
+                existing_sprite.center_x = target_center_x
+                existing_sprite.center_y = target_center_y
+                existing_sprite.alpha = target_alpha
+                existing_sprite.color = (120, 170, 255)
+                continue
+
+            sprite = arcade.Sprite(WATER_TEXTURE)
+            sprite.center_x = target_center_x
+            sprite.center_y = target_center_y
+            sprite.width = TILE_SIZE
+            sprite.height = target_height
+            sprite.alpha = target_alpha
+            sprite.color = (120, 170, 255)
+
+            self.water_sprite_list.append(sprite)
+            chunk_water_map[key] = sprite
 
     def _apply_world_block_diffs(self, changes: list[tuple[int, int, int, int]]):
         """Aktualisiert Sprites einzelner geänderter Blöcke ohne Chunk-Rebuild."""
@@ -663,6 +767,8 @@ class GameWindow(arcade.Window):
         self.placed_torch_lights = {}
         self.chunk_sprite_lists = {}
         self.chunk_sprite_maps = {}
+        self.water_sprite_maps = {}
+        self._debug_logged_tiny_edge_cells = set()
         self.render_tile_range = None
         self.camera.position = self._clamped_camera_position()
         self.world.update_loaded_chunks(self.player.center_x)
@@ -770,7 +876,7 @@ class GameWindow(arcade.Window):
 
         water_changes = self.world.consume_changed_water()
         if water_changes and not did_full_rebuild:
-            self._rebuild_world_sprites()
+            self._apply_world_water_diffs(water_changes)
 
         if self.player.world_dirty:
             self.player.world_dirty = False
@@ -781,8 +887,16 @@ class GameWindow(arcade.Window):
             max_loads=self.max_chunk_loads_per_frame,
             max_unloads=self.max_chunk_unloads_per_frame,
         )
-        if loaded_chunks or unloaded_chunks:
-            self._sync_chunk_sprite_cache(loaded_chunks, unloaded_chunks)
+
+        # world.update(...) can already load/unload chunks before this budgeted call.
+        # Reconcile cache keys with actual loaded chunk keys to avoid missing visuals.
+        loaded_chunk_set = set(loaded_chunks)
+        unloaded_chunk_set = set(unloaded_chunks)
+        loaded_chunk_set.update(set(self.world.chunks.keys()) - set(self.chunk_sprite_lists.keys()))
+        unloaded_chunk_set.update(set(self.chunk_sprite_lists.keys()) - set(self.world.chunks.keys()))
+
+        if loaded_chunk_set or unloaded_chunk_set:
+            self._sync_chunk_sprite_cache(sorted(loaded_chunk_set), sorted(unloaded_chunk_set))
 
         self._sync_torch_lights()
         self._update_mobs(delta_time)
@@ -1035,8 +1149,8 @@ class GameWindow(arcade.Window):
             self.player.move_right()
         elif symbol == arcade.key.Q:
             if self.mouse_screen_x is not None and self.mouse_screen_y is not None:
-                tile_x, tile_y = self._place_water_at_mouse_cursor()
-                if tile_x is not None and tile_y is not None:
+                placed = self._place_water_at_mouse_cursor()
+                if placed is not None:
                     return
         elif symbol == arcade.key.SPACE or symbol == arcade.key.UP or symbol == arcade.key.W:
             if self.player.on_ground:
