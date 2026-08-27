@@ -12,7 +12,7 @@ TARGET_FPS = 60
 BACKGROUND_COLOR = (135, 206, 235, 255)  # Heller Himmelblau in RGBA
 
 # TODO_STUDENT (⭐): Ändere den Seed und beobachte die Welt.
-WORLD_SEED = 1337
+WORLD_SEED = 11
 
 # TODO_STUDENT (⭐⭐⭐): Für Startmenü-Challenge auf True setzen oder zur Laufzeit umschalten.
 START_FULLSCREEN = False

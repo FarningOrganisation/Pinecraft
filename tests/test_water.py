@@ -8,6 +8,7 @@ import arcade
 
 from blocks import AIR, GRASS, LEAVES, OAK, SAND, STONE
 from game import GameWindow
+from player import Player
 from settings import CHUNK_WIDTH, TILE_SIZE
 from world import World
 from world_generation import (
@@ -529,6 +530,220 @@ class WaterTests(unittest.TestCase):
 
         tile_x, tile_y = window.world.to_block_position(200.0 / 16.0, 200.0 / 16.0)
         self.assertAlmostEqual(window.world.get_water(tile_x, tile_y), 1.0, places=6)
+
+    def test_placing_solid_block_into_water_removes_displaced_water(self):
+        world = World(seed=1)
+        world.set_block(2, 8, AIR)
+        world.set_water(2, 8, 1.0)
+
+        placed = world.place_block(2, 8, STONE)
+
+        self.assertTrue(placed)
+        self.assertEqual(world.get_block(2, 8), STONE)
+        self.assertAlmostEqual(world.get_water(2, 8), 0.0, places=6)
+
+    def test_placing_non_solid_block_into_water_keeps_water(self):
+        world = World(seed=1)
+        world.set_block(3, 8, AIR)
+        world.set_water(3, 8, 0.75)
+
+        placed = world.place_block(3, 8, OAK)
+
+        self.assertTrue(placed)
+        self.assertEqual(world.get_block(3, 8), OAK)
+        self.assertAlmostEqual(world.get_water(3, 8), 0.75, places=6)
+
+    def test_player_in_water_moves_slower_and_has_reduced_gravity_factor(self):
+        world = World(seed=1)
+        player = Player(world=world)
+
+        player.in_water = False
+        player.move_right()
+        speed_air = player.change_x
+
+        player.in_water = True
+        player.move_right()
+        speed_water = player.change_x
+
+        self.assertGreater(speed_air, speed_water)
+        self.assertLess(player.get_gravity_multiplier(), 1.0)
+
+    def test_underwater_bubbles_pop_then_player_takes_damage(self):
+        world = World(seed=1)
+        for y in range(8, 13):
+            world.set_block(0, y, AIR)
+            world.set_water(0, y, 1.0)
+
+        player = Player(world=world)
+        player.center_x, player.center_y = world.to_world_position(0, 10)
+
+        player.refresh_water_state()
+        self.assertTrue(player.in_water)
+
+        start_health = player.health
+        total_time = player.max_air_bubbles * player.bubble_pop_interval + 1.2
+        steps = int(total_time / 0.1)
+
+        for _ in range(steps):
+            player.refresh_water_state()
+            player.update_water_breathing(0.1)
+            player.update(0.1)
+
+        self.assertEqual(player.air_bubbles, 0)
+        self.assertLess(player.health, start_health)
+
+    def test_underwater_state_requires_head_submersion(self):
+        world = World(seed=1)
+        world.set_block(0, 10, AIR)
+        world.set_block(0, 11, AIR)
+        world.set_water(0, 10, 1.0)
+
+        player = Player(world=world)
+        player.center_x = (0.5) * TILE_SIZE
+        player.center_y = 11 * TILE_SIZE
+
+        # Kopf über der Wasseroberfläche: nicht "unter Wasser".
+        player.refresh_water_state()
+        self.assertFalse(player.in_water)
+
+        # Kopf unter der Wasseroberfläche: jetzt "unter Wasser".
+        player.center_y = 10 * TILE_SIZE
+        player.refresh_water_state()
+        self.assertTrue(player.in_water)
+
+    def test_feet_in_water_enables_surface_swim_hop(self):
+        world = World(seed=1)
+        world.set_block(0, 10, AIR)
+        world.set_water(0, 10, 1.0)
+
+        player = Player(world=world)
+        player.center_x = 0.5 * TILE_SIZE
+        player.center_y = 11.5 * TILE_SIZE
+        player.refresh_water_state()
+
+        self.assertFalse(player.in_water)
+        self.assertTrue(player.feet_in_water)
+
+        player.change_y = 0.0
+        player.apply_swim_input(True, 0.1)
+        self.assertGreaterEqual(player.change_y, player.SWIM_SURFACE_HOP_SPEED)
+
+        speed_with_feet_in_water = player.get_horizontal_speed()
+        player.feet_in_water = False
+        speed_on_land = player.get_horizontal_speed()
+        self.assertLess(speed_with_feet_in_water, speed_on_land)
+
+    def test_mining_does_not_block_swim_up_input(self):
+        world = World(seed=1)
+        player = Player(world=world)
+        player.in_water = True
+        player.feet_in_water = True
+        player.is_mining = True
+        player.change_y = 0.0
+
+        player.apply_swim_input(True, 0.1)
+
+        self.assertGreater(player.change_y, 0.0)
+
+    def test_deep_vertical_shaft_fills_without_internal_air_gaps(self):
+        world = World(seed=1)
+        shaft_x = 0
+        shaft_bottom_y = 6
+        shaft_top_y = 24
+
+        for x in range(-4, 5):
+            for y in range(shaft_bottom_y, shaft_top_y + 3):
+                world.set_block(x, y, AIR)
+
+        for y in range(shaft_bottom_y, shaft_top_y + 1):
+            world.set_block(-1, y, STONE)
+            world.set_block(1, y, STONE)
+        world.set_block(shaft_x, shaft_bottom_y - 1, STONE)
+
+        pond_surface_y = shaft_top_y
+        for x in range(-3, 4):
+            world.set_block(x, pond_surface_y + 1, AIR)
+            world.set_block(x, pond_surface_y, AIR)
+            world.set_block(x, pond_surface_y - 1, STONE)
+        for x in (-4, 4):
+            world.set_block(x, pond_surface_y, STONE)
+            world.set_block(x, pond_surface_y + 1, STONE)
+
+        world.set_block(shaft_x, pond_surface_y - 1, AIR)
+
+        for x in range(-3, 4):
+            if x == shaft_x:
+                continue
+            world.set_water(x, pond_surface_y, 1.0)
+            world.set_water(x, pond_surface_y + 1, 1.0)
+
+        for _ in range(240):
+            world.water_system.update(world, 0.1)
+
+        occupied = [
+            y
+            for y in range(shaft_bottom_y, shaft_top_y + 1)
+            if world.get_water(shaft_x, y) > world.water_system.min_flow
+        ]
+        self.assertTrue(occupied)
+
+        first_filled = min(occupied)
+        last_filled = max(occupied)
+        for y in range(first_filled, last_filled + 1):
+            self.assertGreater(
+                world.get_water(shaft_x, y),
+                world.water_system.min_flow,
+                f"internal vertical water gap at y={y}",
+            )
+
+    def test_renderer_keeps_thin_vertical_bridge_for_tiny_water_between_levels(self):
+        world = World(seed=1)
+        chunk = world.generate_chunk(0)
+
+        local_x = 5
+        for y in (10, 11, 12):
+            chunk.set_block(local_x, y, AIR)
+
+        chunk.set_water(local_x, 12, 1.0)
+        chunk.set_water(local_x, 11, WATER_RENDER_THRESHOLD * 0.5)
+        chunk.set_water(local_x, 10, 1.0)
+
+        _sprites, sprite_map = build_chunk_water_sprite_list(0, chunk, 0, 30, include_map=True)
+
+        self.assertIn((local_x, 12), sprite_map)
+        self.assertIn((local_x, 10), sprite_map)
+        self.assertIn((local_x, 11), sprite_map)
+        self.assertAlmostEqual(sprite_map[(local_x, 11)].height, TILE_SIZE / 8, places=6)
+
+    def test_breaking_below_water_column_reactivates_upper_cells(self):
+        world = World(seed=1)
+        x = 0
+
+        for y in range(7, 15):
+            world.set_block(x, y, AIR)
+            world.set_block(x - 1, y, STONE)
+            world.set_block(x + 1, y, STONE)
+
+        world.set_block(x, 9, STONE)
+        world.set_block(x, 8, AIR)
+        world.set_block(x, 7, STONE)
+
+        world.set_water(x, 10, 1.0)
+        world.set_water(x, 11, 1.0)
+        world.set_water(x, 12, 1.0)
+
+        for _ in range(60):
+            world.water_system.update(world, 0.1)
+            if not world.water_system.active_cells:
+                break
+
+        self.assertEqual(world.water_system.active_cells, set())
+
+        world.break_block(x, 9)
+
+        self.assertIn((x, 10), world.water_system.active_cells)
+        self.assertIn((x, 11), world.water_system.active_cells)
+        self.assertIn((x, 12), world.water_system.active_cells)
 
 
 if __name__ == "__main__":

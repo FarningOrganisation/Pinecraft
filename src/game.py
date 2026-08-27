@@ -24,6 +24,7 @@ from mobs.zombie import Zombie
 from lighting import LightingSystem
 from physics import AABBPhysics, aabb_overlap
 from player import Player
+from ui.bubble_ui import BubbleUI
 from ui.health_ui import HealthUI
 from ui.hotbar import Hotbar
 from ui.inventory_ui import InventoryUI
@@ -42,6 +43,7 @@ from settings import (
 )
 from world import World, world_to_chunk_and_local
 from world_generation import (
+    WATER_VISUAL_STEPS,
     WATER_RENDER_THRESHOLD,
     WATER_TEXTURE,
     build_chunk_sprite_list,
@@ -73,6 +75,7 @@ class GameWindow(arcade.Window):
         self.max_active_mobs = 5
         self.hotbar = Hotbar(self.player)
         self.health_ui = HealthUI(self.player)
+        self.bubble_ui = BubbleUI(self.player)
         self.inventory_ui = InventoryUI(self.player, SCREEN_WIDTH, SCREEN_HEIGHT)
         self.chunk_sprite_lists: dict[int, arcade.SpriteList] = {}
         self.chunk_sprite_maps: dict[int, dict[tuple[int, int], arcade.Sprite]] = {}
@@ -112,6 +115,7 @@ class GameWindow(arcade.Window):
         self.render_buffer_tiles = 24
         self.left_pressed = False
         self.right_pressed = False
+        self.jump_pressed = False
         self.left_mouse_held = False
         self.left_mouse_mining_chain = False
         self.mouse_screen_x = 0.0
@@ -633,6 +637,11 @@ class GameWindow(arcade.Window):
             block_open_for_water = block_id == AIR or not is_block_solid(block_id)
             normalized = max(0.0, min(1.0, float(new_value)))
             target_height = get_water_render_height(normalized)
+            if target_height <= 0.0 and normalized > 0.0:
+                above = self.world.get_water(tile_x, tile_y + 1)
+                below = self.world.get_water(tile_x, tile_y - 1)
+                if above >= WATER_RENDER_THRESHOLD or below >= WATER_RENDER_THRESHOLD:
+                    target_height = TILE_SIZE / WATER_VISUAL_STEPS
             should_render = in_visible_band and block_open_for_water and target_height > 0.0
 
             if 0.0 < normalized < WATER_RENDER_THRESHOLD:
@@ -758,7 +767,9 @@ class GameWindow(arcade.Window):
         self.mob_spawn_timer = 0.0
         self.hotbar = Hotbar(self.player)
         self.health_ui = HealthUI(self.player)
+        self.bubble_ui = BubbleUI(self.player)
         self.inventory_ui = InventoryUI(self.player, SCREEN_WIDTH, SCREEN_HEIGHT)
+        self.jump_pressed = False
         self.physics = AABBPhysics(self.world)
         for light in list(self.light_layer):
             self.light_layer.remove(light)
@@ -809,6 +820,9 @@ class GameWindow(arcade.Window):
             self.fps_frame_accumulator = 0
             self.fps_text.text = f"FPS: {self.fps_display:5.1f}"
 
+        physics_delta = min(delta_time, 1 / 30)
+
+        self.player.refresh_water_state()
         if self.left_pressed and not self.right_pressed:
             self.player.move_left()
         elif self.right_pressed and not self.left_pressed:
@@ -816,13 +830,17 @@ class GameWindow(arcade.Window):
         elif self.player.on_ground:
             self.player.stop_horizontal()
 
+        self.player.apply_swim_input(self.jump_pressed, physics_delta)
+
         was_on_ground = self.player.on_ground
-        physics_delta = min(delta_time, 1 / 30)
         self.physics.update(self.player, physics_delta)
         if was_on_ground and not self.player.on_ground:
             self.player.begin_fall_tracking()
         elif not was_on_ground and self.player.on_ground:
             self.player.apply_fall_damage()
+
+        self.player.refresh_water_state()
+        self.player.update_water_breathing(physics_delta)
         self.player.update(physics_delta)
         self.world.update(physics_delta, center_x=self.player.center_x, center_y=self.player.center_y, player=self.player)
 
@@ -1058,6 +1076,7 @@ class GameWindow(arcade.Window):
 
         self.ui_camera.use()
         self.health_ui.draw(self.hotbar)
+        self.bubble_ui.draw(self.hotbar, self.health_ui)
         self.hotbar.draw()
         self.inventory_ui.draw()
         self.fps_text.y = self.height - 16
@@ -1153,6 +1172,9 @@ class GameWindow(arcade.Window):
                 if placed is not None:
                     return
         elif symbol == arcade.key.SPACE or symbol == arcade.key.UP or symbol == arcade.key.W:
+            self.jump_pressed = True
+            if self.player.in_water or self.player.feet_in_water:
+                return
             if self.player.on_ground:
                 self.player.jump()
         elif symbol == arcade.key.E:
@@ -1168,6 +1190,8 @@ class GameWindow(arcade.Window):
             self.left_pressed = False
         elif symbol in (arcade.key.D, arcade.key.RIGHT):
             self.right_pressed = False
+        elif symbol in (arcade.key.SPACE, arcade.key.UP, arcade.key.W):
+            self.jump_pressed = False
 
         if not self.left_pressed and not self.right_pressed:
             self.player.stop_horizontal()

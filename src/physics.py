@@ -118,7 +118,10 @@ class AABBPhysics:
 
         player.on_ground = self._grounded_below_player(player)
         if not player.on_ground:
-            player.change_y -= GRAVITY * delta_time
+            gravity_multiplier = 1.0
+            if hasattr(player, "get_gravity_multiplier"):
+                gravity_multiplier = max(0.0, float(player.get_gravity_multiplier()))
+            player.change_y -= GRAVITY * gravity_multiplier * delta_time
 
         player.center_x += player.change_x * delta_time
         self._resolve_horizontal(player, previous_left, previous_right)

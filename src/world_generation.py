@@ -492,13 +492,13 @@ class WorldGenerator:
                     continue
 
                 below_block = chunk.get_block(local_x, y - 1)
-                above_block = chunk.get_block(local_x, y + 1)
-                if below_block == AIR or above_block == AIR:
+                if below_block == AIR:
                     continue
 
                 cave_signal = self._value_noise_2d(world_x, y, cell_size=10, salt=1181)
                 pocket_signal = self._value_noise_2d(world_x, y, cell_size=22, salt=1193)
-                if cave_signal > 0.71 and pocket_signal > 0.62:
+                # Sichtbare Hoehlenpfuetzen: Wasser auf festen Boeden in Cave-AIR.
+                if cave_signal > 0.66 and pocket_signal > 0.56:
                     chunk.set_water(local_x, y, 1.0)
 
         world.apply_pending_generated_blocks(chunk)
@@ -642,6 +642,13 @@ def build_chunk_water_sprite_list(chunk_x: int, chunk, min_tile_y: int, max_tile
 
         normalized = max(0.0, min(1.0, float(level)))
         height = get_water_render_height(normalized)
+        if height <= 0.0 and normalized > 0.0:
+            # Verhindert sichtbare "Luft-Lücken" in vertikalen Wassersträngen,
+            # wenn nur Restmengen unterhalb der Render-Schwelle vorliegen.
+            above = chunk.get_water(local_x, y + 1) if y + 1 < chunk.height else 0.0
+            below = chunk.get_water(local_x, y - 1) if y - 1 >= 0 else 0.0
+            if above >= WATER_RENDER_THRESHOLD or below >= WATER_RENDER_THRESHOLD:
+                height = TILE_SIZE / WATER_VISUAL_STEPS
         if height <= 0.0:
             continue
 

@@ -408,9 +408,16 @@ class World:
         old_block_id = chunk.get_block(local_x, y)
         if old_block_id == block_id:
             return
+
+        # Erste Wasser-Implementierung: Bei solidem Block wird vorhandenes Wasser
+        # in derselben Zelle entfernt (kein komplexes Verdrängen).
+        if block_id != AIR and is_block_solid(block_id) and self.get_water(world_x, y) > 0.0:
+            self.set_water(world_x, y, 0.0)
+
         chunk.set_block(local_x, y, block_id)
         self.changed_blocks.append((world_x, y, old_block_id, block_id))
         self.water_system.activate_neighborhood(world_x, y)
+        self.water_system.activate_water_column_above(self, world_x, y + 1)
 
     def consume_changed_blocks(self) -> list[tuple[int, int, int, int]]:
         """Liefert und leert die Liste geänderter Blöcke als (x, y, alt, neu)."""

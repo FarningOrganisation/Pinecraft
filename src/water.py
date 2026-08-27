@@ -49,6 +49,19 @@ class WaterSystem:
                 continue
             self.active_cells.add(cell)
 
+    def activate_water_column_above(self, world: World, world_x: int, start_y: int) -> None:
+        """Aktiviert Wasserzellen oberhalb einer Blockänderung entlang der gleichen Spalte."""
+        y = max(0, start_y)
+        while y < WORLD_HEIGHT:
+            block_id = world.get_block(world_x, y, generate_if_missing=False)
+            if not is_block_water_passable(block_id):
+                break
+
+            if world.get_water(world_x, y) > 0.0:
+                self.activate_neighborhood(world_x, y)
+
+            y += 1
+
     @staticmethod
     def _world_x_to_chunk_x(world_x: int) -> int:
         chunk_x, local_x = divmod(world_x, CHUNK_WIDTH)

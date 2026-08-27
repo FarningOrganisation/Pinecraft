@@ -47,6 +47,15 @@ class Player(AnimatedSprite):
     """Ein einfacher Spieler mit animierbaren Zuständen."""
 
     BASE_MINING_DURATION = 1.5
+    SWIM_SPEED_FACTOR = 0.58
+    SWIM_GRAVITY_FACTOR = 0.36
+    SWIM_UP_ACCELERATION = 980.0
+    SWIM_MAX_RISE_SPEED = 230.0
+    SWIM_SURFACE_HOP_SPEED = 155.0
+    WATER_CONTACT_THRESHOLD = 0.04
+    MAX_AIR_BUBBLES = 10
+    BUBBLE_POP_INTERVAL = 0.75
+    DROWNING_DAMAGE_INTERVAL = 1.0
 
     def __init__(self, world: World):
         self.is_mining = False
@@ -103,6 +112,14 @@ class Player(AnimatedSprite):
         self.max_health = 8
         self.health = self.max_health
         self.invincibility_timer = 0.0
+        self.in_water = False
+        self.feet_in_water = False
+        self.water_submersion = 0.0
+        self.max_air_bubbles = self.MAX_AIR_BUBBLES
+        self.air_bubbles = self.max_air_bubbles
+        self.bubble_pop_interval = self.BUBBLE_POP_INTERVAL
+        self._bubble_pop_timer = 0.0
+        self._drowning_damage_timer = 0.0
         self.held_item_size = 16
         self.attack_hitbox_width = 56.0
         self.attack_hitbox_height = 34.0
@@ -663,7 +680,7 @@ class Player(AnimatedSprite):
         """Bewegt den Spieler nach links."""
         if self.is_mining or self.is_attacking:
             return
-        self.change_x = -PLAYER_SPEED
+        self.change_x = -self.get_horizontal_speed()
         self.facing_right = False
         self.scale_x = -1.0
         self.set_state("walking")
@@ -672,7 +689,7 @@ class Player(AnimatedSprite):
         """Bewegt den Spieler nach rechts."""
         if self.is_mining or self.is_attacking:
             return
-        self.change_x = PLAYER_SPEED
+        self.change_x = self.get_horizontal_speed()
         self.facing_right = True
         self.scale_x = 1.0
         self.set_state("walking")
@@ -693,6 +710,118 @@ class Player(AnimatedSprite):
             self.change_y = PLAYER_JUMP_SPEED
             self.on_ground = False
             self.set_state("jumping")
+
+    def get_horizontal_speed(self) -> float:
+        """Liefert die seitliche Zielgeschwindigkeit, in Wasser verlangsamt."""
+        if self.in_water or self.feet_in_water:
+            return PLAYER_SPEED * self.SWIM_SPEED_FACTOR
+        return float(PLAYER_SPEED)
+
+    def get_gravity_multiplier(self) -> float:
+        """Liefert den Gravitätsfaktor für die Physik (unter Wasser reduziert)."""
+        if self.in_water or self.feet_in_water:
+            return self.SWIM_GRAVITY_FACTOR
+        return 1.0
+
+    def apply_swim_input(self, jump_pressed: bool, delta_time: float) -> None:
+        """Erlaubt Auftrieb beim Halten der Sprungtaste unter Wasser."""
+        if not jump_pressed:
+            return
+        if not (self.in_water or self.feet_in_water):
+            return
+        if self.is_attacking:
+            return
+
+        if not self.in_water and self.feet_in_water:
+            self.change_y = max(self.change_y, self.SWIM_SURFACE_HOP_SPEED)
+            return
+
+        self.change_y = min(
+            self.SWIM_MAX_RISE_SPEED,
+            self.change_y + self.SWIM_UP_ACCELERATION * max(0.0, float(delta_time)),
+        )
+
+    def refresh_water_state(self) -> None:
+        """Aktualisiert Wasserkontakt; unter Wasser gilt nur bei eingetauchtem Kopf."""
+        if self.world is None:
+            self.in_water = False
+            self.feet_in_water = False
+            self.water_submersion = 0.0
+            return
+
+        left = self.center_x - self.collision_width / 2
+        right = self.center_x + self.collision_width / 2
+        bottom = self.center_y - self.collision_height / 2
+        top = self.center_y + self.collision_height / 2
+
+        min_tile_x = int(math.floor(left / TILE_SIZE))
+        max_tile_x = int(math.floor((right - 1e-6) / TILE_SIZE))
+        min_tile_y = int(math.floor(bottom / TILE_SIZE))
+        max_tile_y = int(math.floor((top - 1e-6) / TILE_SIZE))
+
+        player_area = max(1.0, self.collision_width * self.collision_height)
+        water_area = 0.0
+
+        for tile_x in range(min_tile_x, max_tile_x + 1):
+            for tile_y in range(min_tile_y, max_tile_y + 1):
+                amount = self.world.get_water(tile_x, tile_y)
+                if amount <= 0.0:
+                    continue
+
+                tile_left = tile_x * TILE_SIZE
+                tile_right = tile_left + TILE_SIZE
+                tile_bottom = tile_y * TILE_SIZE
+                tile_water_top = tile_bottom + TILE_SIZE * max(0.0, min(1.0, amount))
+
+                overlap_w = max(0.0, min(right, tile_right) - max(left, tile_left))
+                overlap_h = max(0.0, min(top, tile_water_top) - max(bottom, tile_bottom))
+                if overlap_w <= 0.0 or overlap_h <= 0.0:
+                    continue
+                water_area += overlap_w * overlap_h
+
+        self.water_submersion = max(0.0, min(1.0, water_area / player_area))
+
+        def point_is_underwater(world_x: float, world_y: float) -> bool:
+            tile_x = int(math.floor(world_x / TILE_SIZE))
+            tile_y = int(math.floor(world_y / TILE_SIZE))
+            amount = self.world.get_water(tile_x, tile_y)
+            if amount <= 0.0:
+                return False
+            water_top = tile_y * TILE_SIZE + TILE_SIZE * max(0.0, min(1.0, amount))
+            return world_y < water_top
+
+        head_probe_y = top - 2.0
+        feet_probe_y = bottom + 2.0
+        x_samples = (
+            left + 2.0,
+            self.center_x,
+            right - 2.0,
+        )
+        self.in_water = any(point_is_underwater(sample_x, head_probe_y) for sample_x in x_samples)
+        self.feet_in_water = any(point_is_underwater(sample_x, feet_probe_y) for sample_x in x_samples)
+
+    def update_water_breathing(self, delta_time: float) -> None:
+        """Lässt Luftblasen unter Wasser nacheinander platzen und verursacht Ertrinken."""
+        dt = max(0.0, float(delta_time))
+        if not self.in_water:
+            self.air_bubbles = self.max_air_bubbles
+            self._bubble_pop_timer = 0.0
+            self._drowning_damage_timer = 0.0
+            return
+
+        self._bubble_pop_timer += dt
+        while self.air_bubbles > 0 and self._bubble_pop_timer >= self.bubble_pop_interval:
+            self.air_bubbles -= 1
+            self._bubble_pop_timer -= self.bubble_pop_interval
+
+        if self.air_bubbles > 0:
+            self._drowning_damage_timer = 0.0
+            return
+
+        self._drowning_damage_timer += dt
+        while self._drowning_damage_timer >= self.DROWNING_DAMAGE_INTERVAL:
+            self.take_damage(1)
+            self._drowning_damage_timer -= self.DROWNING_DAMAGE_INTERVAL
 
     def start_mining(self, block_pos):
         """Startet einen Mining-Vorgang an einer gegebenen Blockposition."""
