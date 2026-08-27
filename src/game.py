@@ -70,7 +70,7 @@ class GameWindow(arcade.Window):
         self.dropped_item_sprite_list = arcade.SpriteList()
         self.dropped_items: list[DroppedItem] = []
         self.mob_sprite_list = arcade.SpriteList()
-        self.mobs: list[Slime] = []
+        self.mobs: list[Mob] = []
         self.mob_spawn_timer = 0.0
         self.max_active_mobs = 5
         self.hotbar = Hotbar(self.player)
@@ -380,7 +380,7 @@ class GameWindow(arcade.Window):
                 light_pos = (self.player.center_x, self.player.center_y + self.player.height * 0.10)
             self.player_torch_light.position = light_pos
             self.player_torch_light.radius = 150.0 * torch_daylight_scale
-            self.player_torch_light.color = self.torch_light_color
+            setattr(self.player_torch_light, "color", self.torch_light_color)
         else:
             self.player_torch_light.radius = 0.0
 
@@ -403,7 +403,7 @@ class GameWindow(arcade.Window):
             else:
                 light.position = (light_x, light_y)
                 light.radius = radius
-                light.color = self.torch_light_color
+                setattr(light, "color", self.torch_light_color)
 
     def _torch_daylight_multiplier(self, world_x: float, world_y: float) -> float:
         """Wrapper to the lighting system implementation."""
