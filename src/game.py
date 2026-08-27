@@ -43,6 +43,9 @@ from settings import (
 from world import World, world_to_chunk_and_local
 from world_generation import build_chunk_sprite_list
 
+# Choose the mob type spawned via the debug key from here instead of scrolling down.
+DEBUG_SPAWN_MOB_CLASS = Zombie
+
 
 class GameWindow(arcade.Window):
     """Ein kleines Spiel-Fenster mit Spieler und generierter Welt."""
@@ -952,7 +955,13 @@ class GameWindow(arcade.Window):
             return
 
         if symbol == arcade.key.P:
-            spawn_mob_next_to_player(self.world, self.player, Zombie, self.mobs, self.mob_sprite_list)  
+            spawn_mob_next_to_player(
+                self.world,
+                self.player,
+                DEBUG_SPAWN_MOB_CLASS,
+                self.mobs,
+                self.mob_sprite_list,
+            )
             return
 
         if 49 <= symbol <= 57:
