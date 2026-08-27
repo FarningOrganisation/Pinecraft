@@ -379,7 +379,7 @@ class GameWindow(arcade.Window):
             if light_pos is None:
                 light_pos = (self.player.center_x, self.player.center_y + self.player.height * 0.10)
             self.player_torch_light.position = light_pos
-            self.player_torch_light.radius = 150.0 * torch_daylight_scale
+            self.player_torch_light.radius = 135.0 * torch_daylight_scale
             setattr(self.player_torch_light, "color", self.torch_light_color)
         else:
             self.player_torch_light.radius = 0.0
@@ -468,6 +468,10 @@ class GameWindow(arcade.Window):
     def _draw_celestials(self):
         """Wrapper to the lighting system implementation."""
         self.lighting.draw_celestials()
+
+    def _draw_moon_no_ambient(self):
+        """Wrapper to draw moon texture in a non-ambient pass."""
+        self.lighting.draw_moon_no_ambient()
 
     def _spawn_dropped_item(self, entry_id: int, tile_x: int, tile_y: int):
         """Erzeugt ein physisches Item an der Blockposition."""
@@ -895,6 +899,7 @@ class GameWindow(arcade.Window):
                 did_full_rebuild = True
 
         block_changes = self.world.consume_changed_blocks()
+        self.lighting.notify_world_block_changes(block_changes)
         if block_changes and not did_full_rebuild:
             self._apply_world_block_diffs(block_changes)
 
@@ -1080,6 +1085,9 @@ class GameWindow(arcade.Window):
         self.light_layer.draw(ambient_color=self._ambient_color())
 
         self.ui_camera.use()
+        self._draw_moon_no_ambient()
+
+        self.ui_camera.use()
         self.health_ui.draw(self.hotbar)
         self.bubble_ui.draw(self.hotbar, self.health_ui)
         self.hotbar.draw()
@@ -1148,6 +1156,12 @@ class GameWindow(arcade.Window):
 
         if cmd_down and symbol == arcade.key.N:
             self.time_of_day = 0.00
+            return
+
+        if cmd_down and symbol == arcade.key.U:
+            self.lighting.use_cpu_underground_overlay_debug = not self.lighting.use_cpu_underground_overlay_debug
+            mode = "CPU" if self.lighting.use_cpu_underground_overlay_debug else "GPU"
+            print(f"[lighting] underground overlay mode: {mode}")
             return
 
         if symbol == arcade.key.P:

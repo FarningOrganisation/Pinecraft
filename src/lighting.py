@@ -1,17 +1,22 @@
 """Lighting and sky rendering helpers for the game."""
 
+from array import array
 import math
+import time
 
 import arcade
 from arcade.future.light import Light
 from arcade.gl import geometry as gl_geometry
 
 from blocks import AIR, get_block_light_opacity, is_block_skylight_surface
+from items import TORCH
 from paths import textures_dir
 from settings import TILE_SIZE, WORLD_HEIGHT
 from world_generation import SEA_LEVEL
 
 CELESTIAL_HIDE_BELOW_SEA_TILES = 10
+MAX_SHADER_TORCH_LIGHTS = 32
+SHADER_TORCH_RADIUS = 210.0
 
 
 class LightingSystem:
@@ -20,6 +25,16 @@ class LightingSystem:
     def __init__(self, window):
         self.window = window
         self.torch_light_color = (255, 190, 100)
+        self.use_cpu_underground_overlay_debug = False
+        self.surface_map_margin_tiles = 4
+
+        self.profile_cpu_overlay_ms = 0.0
+        self.profile_surface_map_update_ms = 0.0
+        self.profile_shader_overlay_ms = 0.0
+        self.profile_moon_light_enabled = False
+        self.profile_moon_light_world_pos: tuple[float, float] = (0.0, 0.0)
+        self.profile_moon_light_radius = 0.0
+        self.profile_moon_light_strength = 0.0
 
         self.window.light_layer.set_background_color((0, 0, 0, 0))
         self.player_torch_light = Light(0.0, 0.0, radius=0.0, color=self.torch_light_color, mode="soft")
@@ -83,6 +98,104 @@ class LightingSystem:
             """,
         )
         self.sky_quad = gl_geometry.quad_2d_fs()
+
+        self.cave_depth_shader_program = self.window.ctx.program(
+            vertex_shader="""
+                #version 330
+                in vec2 in_vert;
+                in vec2 in_uv;
+                out vec2 uv;
+
+                void main() {
+                    uv = in_uv;
+                    gl_Position = vec4(in_vert, 0.0, 1.0);
+                }
+            """,
+            fragment_shader="""
+                #version 330
+                in vec2 uv;
+                out vec4 fragColor;
+
+                uniform sampler2D u_surface_tex;
+                uniform float u_surface_min_x;
+                uniform float u_surface_span;
+                uniform float u_camera_world_x;
+                uniform float u_camera_world_y;
+                uniform float u_screen_width;
+                uniform float u_screen_height;
+                uniform float u_tile_size;
+                uniform float u_day_factor;
+                uniform int u_light_count;
+                uniform vec2 u_light_positions[32];
+                uniform float u_light_radii[32];
+                uniform int u_moon_light_enabled;
+                uniform vec2 u_moon_light_position;
+                uniform float u_moon_light_radius;
+                uniform float u_moon_light_strength;
+                uniform vec3 u_moon_light_color;
+
+                float sample_surface_y(float world_tile_x) {
+                    float col = clamp(world_tile_x - u_surface_min_x, 0.0, u_surface_span - 1.0);
+                    float su = (col + 0.5) / u_surface_span;
+                    return texture(u_surface_tex, vec2(su, 0.5)).r;
+                }
+
+                void main() {
+                    float world_x = u_camera_world_x + (uv.x - 0.5) * u_screen_width;
+                    float world_y = u_camera_world_y + (uv.y - 0.5) * u_screen_height;
+                    float world_tile_x = world_x / u_tile_size;
+
+                    // Mehrfach-Samples glätten Übergänge an Kanten/Höhleneingängen.
+                    float s0 = sample_surface_y(world_tile_x - 2.0);
+                    float s1 = sample_surface_y(world_tile_x - 1.0);
+                    float s2 = sample_surface_y(world_tile_x);
+                    float s3 = sample_surface_y(world_tile_x + 1.0);
+                    float s4 = sample_surface_y(world_tile_x + 2.0);
+                    float surface_y = (s0 * 0.11) + (s1 * 0.22) + (s2 * 0.34) + (s3 * 0.22) + (s4 * 0.11);
+
+                    float depth = max(0.0, surface_y - world_y);
+                    float cave_darkness = smoothstep(56.0, 520.0, depth);
+                    float day_strength = mix(0.72, 0.96, u_day_factor);
+                    cave_darkness = clamp(cave_darkness * day_strength, 0.0, 0.92);
+
+                    // Nacht heller, Twilight-Übergang breiter und weicher.
+                    float ambient = mix(0.48, 1.0, pow(clamp(u_day_factor, 0.0, 1.0), 1.55));
+                    float base_light = ambient * (1.0 - cave_darkness);
+
+                    vec2 world_pos = vec2(world_x, world_y);
+                    float torch_light = 0.0;
+                    for (int i = 0; i < 32; i++) {
+                        if (i >= u_light_count) {
+                            break;
+                        }
+                        float radius = max(1.0, u_light_radii[i]);
+                        float dist = distance(world_pos, u_light_positions[i]);
+                        float falloff = 1.0 - smoothstep(radius * 0.10, radius, dist);
+                        torch_light += falloff * 0.92;
+                    }
+
+                    float moon_light = 0.0;
+                    if (u_moon_light_enabled > 0) {
+                        float md = distance(world_pos, u_moon_light_position);
+                        moon_light = (1.0 - smoothstep(u_moon_light_radius * 0.04, u_moon_light_radius, md)) * u_moon_light_strength;
+                    }
+
+                    vec3 final_light = vec3(base_light + torch_light);
+                    final_light += u_moon_light_color * moon_light;
+                    final_light = clamp(final_light, vec3(0.0), vec3(1.0));
+                    // Src-Farbe ist ein Lichtfaktor; DST_COLOR-Blending multipliziert
+                    // damit die bereits gezeichnete Weltfarbe.
+                    fragColor = vec4(final_light, 1.0);
+                }
+            """,
+        )
+        self.cave_depth_shader_program["u_surface_tex"] = 0
+
+        self._surface_height_texture = self.window.ctx.texture((1, 1), components=1, data=array("f", [0.0]).tobytes(), dtype="f4")
+        self._surface_height_texture.filter = (self.window.ctx.LINEAR, self.window.ctx.LINEAR)
+        self._surface_min_tile_x = 0
+        self._surface_max_tile_x = 0
+        self._surface_map_dirty = True
 
         self.sun_sprite: arcade.Sprite | None = None
         self.moon_sprite: arcade.Sprite | None = None
@@ -184,12 +297,16 @@ class LightingSystem:
     def ambient_color(self) -> tuple[int, int, int]:
         """Tagsüber neutral/weiß; bei Dämmerung/Nacht weicher und dunkler."""
         day_factor = self.day_factor()
-        if day_factor >= 0.46:
+        if day_factor >= 0.60:
             return (255, 255, 255)
-        if day_factor > 0.22:
-            t = (day_factor - 0.22) / (0.46 - 0.22)
-            return self.lerp_color((42, 50, 74), (255, 255, 255), t)
-        return (28, 34, 52)
+
+        # Breiter Twilight-Bereich: langsamerer Lichtwechsel um Sunrise/Sunset.
+        if day_factor > 0.20:
+            t = (day_factor - 0.20) / (0.60 - 0.20)
+            return self.lerp_color((36, 43, 62), (255, 255, 255), t)
+
+        # Nacht etwas heller als zuvor.
+        return (58, 68, 102)
 
     def draw_sky_shader(self):
         """Zeichnet den dynamischen Himmel per Fullscreen-Fragment-Shader."""
@@ -198,6 +315,72 @@ class LightingSystem:
         self.sky_shader_program["u_underground"] = float(self.sky_background_blend())
         self.sky_quad.render(self.sky_shader_program)
 
+    def notify_world_block_changes(self, changed_blocks: list[tuple[int, int, int, int]]) -> None:
+        """Markiert die Surface-Map als dirty, wenn relevante sichtbare Spalten geändert wurden."""
+        if not changed_blocks:
+            return
+
+        if self._surface_min_tile_x > self._surface_max_tile_x:
+            self._surface_map_dirty = True
+            return
+
+        guard = self.surface_map_margin_tiles + 2
+        min_x = self._surface_min_tile_x - guard
+        max_x = self._surface_max_tile_x + guard
+        for world_x, _y, _old_block, _new_block in changed_blocks:
+            if min_x <= world_x <= max_x:
+                self._surface_map_dirty = True
+                return
+
+    def _update_surface_height_texture_if_needed(self) -> None:
+        """Aktualisiert die Surface-Height-Texture nur bei neuem Kamera-X-Bereich oder dirty-Flag."""
+        min_tile_x, max_tile_x = self.window._get_visible_tile_x_range(margin_tiles=self.surface_map_margin_tiles)
+        range_changed = min_tile_x != self._surface_min_tile_x or max_tile_x != self._surface_max_tile_x
+        if not range_changed and not self._surface_map_dirty:
+            return
+
+        t0 = time.perf_counter()
+        self._surface_min_tile_x = min_tile_x
+        self._surface_max_tile_x = max_tile_x
+        width = max(1, max_tile_x - min_tile_x + 1)
+
+        values = array("f")
+        for tile_x in range(min_tile_x, max_tile_x + 1):
+            # Echte Spaltenoberfläche aus Blockstruktur statt Terrain-Funktionswert.
+            surface_tile_y = -1
+            for y in range(WORLD_HEIGHT - 1, -1, -1):
+                block_id = self.window.world.get_block(tile_x, y, generate_if_missing=False)
+                if get_block_light_opacity(block_id) <= 0.0:
+                    continue
+                if is_block_skylight_surface(block_id):
+                    surface_tile_y = y
+                    break
+
+            if surface_tile_y < 0:
+                surface_tile_y = self._column_top_occluder_y(tile_x)
+            if surface_tile_y < 0:
+                surface_tile_y = SEA_LEVEL
+
+            values.append(float((surface_tile_y + 1) * TILE_SIZE))
+
+        data = values.tobytes() if values else array("f", [0.0]).tobytes()
+        if self._surface_height_texture.size[0] != width:
+            old_texture = self._surface_height_texture
+            release_fn = getattr(old_texture, "release", None)
+            if callable(release_fn):
+                release_fn()
+            else:
+                delete_fn = getattr(old_texture, "delete", None)
+                if callable(delete_fn):
+                    delete_fn()
+            self._surface_height_texture = self.window.ctx.texture((width, 1), components=1, data=data, dtype="f4")
+            self._surface_height_texture.filter = (self.window.ctx.LINEAR, self.window.ctx.LINEAR)
+        else:
+            self._surface_height_texture.write(data)
+
+        self._surface_map_dirty = False
+        self.profile_surface_map_update_ms = (time.perf_counter() - t0) * 1000.0
+
     def _is_torch_equipped(self) -> bool:
         """True, wenn der aktuell ausgewählte Hotbar-Slot eine Fackel enthält."""
         return self.window._is_torch_equipped()
@@ -205,11 +388,24 @@ class LightingSystem:
     def torch_daylight_multiplier(self, world_x: float, world_y: float) -> float:
         """Torch visibility fades almost to zero in bright daylight and rises again toward dusk/night."""
         day_factor = self.day_factor()
-        if day_factor >= 0.72:
-            return 0.0
+        tile_x = int(world_x // TILE_SIZE)
+        tile_y = int(world_y // TILE_SIZE)
+        has_sky_access = self.is_sky_lit_air(tile_x, tile_y, max_scan=24)
+
+        # Bei offenem Himmel tagsüber kein Torch-Effekt.
+        if has_sky_access:
+            if day_factor >= 0.60:
+                return 0.0
+            if day_factor <= 0.25:
+                return 1.0
+            return max(0.0, 1.0 - (day_factor - 0.25) / (0.60 - 0.25))
+
+        # Unterirdisch darf Torch auch tagsüber sichtbar bleiben.
         if day_factor <= 0.15:
             return 1.0
-        return max(0.0, 1.0 - ((day_factor - 0.15) / (0.72 - 0.15)) * 0.98)
+        if day_factor >= 0.90:
+            return 0.35
+        return max(0.35, 1.0 - ((day_factor - 0.15) / (0.90 - 0.15)) * 0.65)
 
     def _torch_shadow_positions(self) -> list[tuple[int, int]]:
         """Positionsliste aller Lichtquellen, die die Dunkelheitsmaske aufhellen sollen."""
@@ -296,8 +492,8 @@ class LightingSystem:
 
         return sky_light
 
-    def draw_underground_darkness_overlay(self):
-        """Zeichnet die Tiefe anhand der Nachbar-Block-Struktur; keine globale Höhlen-Erkennung mehr."""
+    def _draw_underground_darkness_overlay_cpu(self):
+        """Legacy CPU-Overlay fuer Debug/Profilvergleich."""
         min_tile_x, max_tile_x = self.window._get_visible_tile_x_range(margin_tiles=2)
         min_tile_y, max_tile_y = self.window._get_visible_tile_range(margin_tiles=1)
 
@@ -414,6 +610,204 @@ class LightingSystem:
                 if dark_alpha > 0:
                     arcade.draw_lrbt_rectangle_filled(left, right, bottom, top, (0, 0, 0, dark_alpha))
 
+    def _draw_underground_darkness_overlay_shader(self):
+        """GPU-Overlay: Cave-Dunkelheit aus Surface-Height-Texture im Fragment-Shader."""
+        self._update_surface_height_texture_if_needed()
+        surface_span = float(max(1, self._surface_max_tile_x - self._surface_min_tile_x + 1))
+
+        def set_uniform_safe(name: str, value) -> bool:
+            try:
+                self.cave_depth_shader_program[name] = value
+                return True
+            except KeyError:
+                # Manche Treiber optimieren ungenutzte Uniforms komplett heraus.
+                return False
+
+        torch_lights = self._collect_shader_torch_lights(MAX_SHADER_TORCH_LIGHTS)
+        light_positions_flat: list[float] = [0.0] * (MAX_SHADER_TORCH_LIGHTS * 2)
+        light_radii: list[float] = [0.0] * MAX_SHADER_TORCH_LIGHTS
+        for i, (light_x, light_y, radius) in enumerate(torch_lights):
+            light_positions_flat[i * 2] = light_x
+            light_positions_flat[i * 2 + 1] = light_y
+            light_radii[i] = radius
+
+        set_uniform_safe("u_surface_min_x", float(self._surface_min_tile_x))
+        set_uniform_safe("u_surface_span", surface_span)
+        set_uniform_safe("u_camera_world_x", float(self.window.camera.position[0]))
+        set_uniform_safe("u_camera_world_y", float(self.window.camera.position[1]))
+        set_uniform_safe("u_screen_width", float(self.window.width))
+        set_uniform_safe("u_screen_height", float(self.window.height))
+        set_uniform_safe("u_tile_size", float(TILE_SIZE))
+        set_uniform_safe("u_day_factor", float(self.day_factor()))
+        set_uniform_safe("u_light_count", int(len(torch_lights)))
+
+        moon_light = self._moon_world_light()
+        if moon_light is None:
+            set_uniform_safe("u_moon_light_enabled", 0)
+            self.profile_moon_light_enabled = False
+            self.profile_moon_light_radius = 0.0
+            self.profile_moon_light_strength = 0.0
+        else:
+            moon_world_x, moon_world_y, moon_radius, moon_strength = moon_light
+            set_uniform_safe("u_moon_light_enabled", 1)
+            set_uniform_safe("u_moon_light_position", (moon_world_x, moon_world_y))
+            set_uniform_safe("u_moon_light_radius", moon_radius)
+            set_uniform_safe("u_moon_light_strength", moon_strength)
+            set_uniform_safe("u_moon_light_color", (0.82, 0.88, 1.0))
+            self.profile_moon_light_enabled = True
+            self.profile_moon_light_world_pos = (moon_world_x, moon_world_y)
+            self.profile_moon_light_radius = moon_radius
+            self.profile_moon_light_strength = moon_strength
+
+        array_positions_set = set_uniform_safe("u_light_positions", tuple(light_positions_flat))
+        array_radii_set = set_uniform_safe("u_light_radii", tuple(light_radii))
+        if not (array_positions_set and array_radii_set):
+            for i in range(MAX_SHADER_TORCH_LIGHTS):
+                set_uniform_safe(
+                    f"u_light_positions[{i}]",
+                    (light_positions_flat[i * 2], light_positions_flat[i * 2 + 1]),
+                )
+                set_uniform_safe(f"u_light_radii[{i}]", light_radii[i])
+
+        prev_blend_func = self.window.ctx.blend_func
+        t0 = time.perf_counter()
+
+        def bind_surface_texture() -> None:
+            """Bindet die Surface-Texture kompatibel mit unterschiedlichen Arcade-Versionen."""
+            try:
+                self._surface_height_texture.use(location=0)
+                return
+            except TypeError:
+                pass
+
+            try:
+                self._surface_height_texture.use(0)
+                return
+            except TypeError:
+                pass
+
+            self._surface_height_texture.use()
+
+        try:
+            with self.window.ctx.enabled(self.window.ctx.BLEND):
+                self.window.ctx.blend_func = (self.window.ctx.DST_COLOR, self.window.ctx.ZERO)
+                bind_surface_texture()
+                self.sky_quad.render(self.cave_depth_shader_program)
+        finally:
+            self.window.ctx.blend_func = prev_blend_func
+
+        self.profile_shader_overlay_ms = (time.perf_counter() - t0) * 1000.0
+
+    def _celestial_screen_position(self, progress: float) -> tuple[float, float]:
+        """Bildschirmposition auf der stationären Himmelsellipse."""
+        p = max(0.0, min(1.0, progress))
+        theta = math.pi * p
+        center_x = self.window.width * 0.5
+        center_y = self.window.height * 0.30
+        radius_x = self.window.width * 0.62
+        radius_y = self.window.height * 0.69
+        x = center_x + radius_x * math.cos(theta)
+        y = center_y + radius_y * math.sin(theta)
+        return x, y
+
+    def _moon_progress(self) -> float | None:
+        """Liefert den normierten Verlauf der Mondbahn oder None, wenn nicht sichtbar."""
+        if self.window.time_of_day >= 0.75:
+            return (self.window.time_of_day - 0.75) / 0.5
+        if self.window.time_of_day < 0.25:
+            return (self.window.time_of_day + 0.25) / 0.5
+        return None
+
+    def _moon_screen_position(self) -> tuple[float, float] | None:
+        """Aktuelle Mondposition im Bildschirmraum."""
+        moon_progress = self._moon_progress()
+        if moon_progress is None:
+            return None
+        return self._celestial_screen_position(moon_progress)
+
+    def _moon_world_light(self) -> tuple[float, float, float, float] | None:
+        """Weltkoordinaten und Parameter einer mondfarbenen Lichtquelle."""
+        moon_screen_pos = self._moon_screen_position()
+        if moon_screen_pos is None:
+            return None
+
+        sea_level_world_y = (SEA_LEVEL + 1.0) * TILE_SIZE
+        if self.window.camera.position[1] < sea_level_world_y - CELESTIAL_HIDE_BELOW_SEA_TILES * TILE_SIZE:
+            return None
+
+        moon_x_screen, moon_y_screen = moon_screen_pos
+        # Explizites Mapping Screen -> World (gleiche Formel wie _screen_to_world im GameWindow).
+        moon_world_x = self.window.camera.position[0] + (moon_x_screen - self.window.width * 0.5)
+        moon_world_y = self.window.camera.position[1] + (moon_y_screen - self.window.height * 0.5)
+
+        night_strength = max(0.0, 1.0 - self.day_factor())
+        moon_radius = 760.0
+        moon_strength = 0.34 + 0.36 * night_strength
+        return float(moon_world_x), float(moon_world_y), moon_radius, moon_strength
+
+    def _collect_shader_torch_lights(self, max_lights: int) -> list[tuple[float, float, float]]:
+        """Sammelt nahe, sichtbare Torch-Lichter fuer den GPU-Shader in Weltkoordinaten."""
+        lights: list[tuple[float, float, float, float]] = []
+
+        min_tile_x, max_tile_x = self.window._get_visible_tile_x_range(margin_tiles=10)
+        min_tile_y, max_tile_y = self.window._get_visible_tile_range(margin_tiles=8)
+        player_x = float(self.window.player.center_x)
+        player_y = float(self.window.player.center_y)
+
+        for (tile_x, tile_y), item_id in self.window.world.placed_items.items():
+            if item_id != TORCH:
+                continue
+            if tile_x < min_tile_x or tile_x > max_tile_x:
+                continue
+            if tile_y < min_tile_y or tile_y > max_tile_y:
+                continue
+
+            light_x = (tile_x + 0.5) * TILE_SIZE
+            light_y = (tile_y + 1.0) * TILE_SIZE
+            torch_scale = self.torch_daylight_multiplier(light_x, light_y)
+            if torch_scale <= 0.01:
+                continue
+            radius = SHADER_TORCH_RADIUS * torch_scale
+            dist_sq = (light_x - player_x) ** 2 + (light_y - player_y) ** 2
+            lights.append((dist_sq, light_x, light_y, radius))
+
+        if self.window._is_torch_equipped():
+            player_light_pos = self.window.player.get_equipped_light_source_position()
+            if player_light_pos is not None:
+                light_x = float(player_light_pos[0])
+                light_y = float(player_light_pos[1])
+                torch_scale = self.torch_daylight_multiplier(light_x, light_y)
+                if torch_scale > 0.01:
+                    radius = SHADER_TORCH_RADIUS * torch_scale
+                    dist_sq = (light_x - player_x) ** 2 + (light_y - player_y) ** 2
+                    lights.append((dist_sq, light_x, light_y, radius))
+
+        lights.sort(key=lambda entry: entry[0])
+        return [(x, y, r) for _dist, x, y, r in lights[:max_lights]]
+
+    def draw_underground_darkness_overlay(self):
+        """Standardpfad: Shader-Overlay; CPU-Pfad bleibt optional per Debug-Flag."""
+        if self.use_cpu_underground_overlay_debug:
+            t0 = time.perf_counter()
+            self._draw_underground_darkness_overlay_cpu()
+            self.profile_cpu_overlay_ms = (time.perf_counter() - t0) * 1000.0
+            self.profile_shader_overlay_ms = 0.0
+            return
+
+        self.profile_cpu_overlay_ms = 0.0
+        self._draw_underground_darkness_overlay_shader()
+
+    def profile_debug_line(self) -> str:
+        """Kurzformat fuer HUD-Debugwerte rund um Underground-Lighting."""
+        mode = "CPU" if self.use_cpu_underground_overlay_debug else "GPU"
+        moon_state = "on" if self.profile_moon_light_enabled else "off"
+        return (
+            f"Light[{mode}] cpu={self.profile_cpu_overlay_ms:5.2f}ms "
+            f"surf={self.profile_surface_map_update_ms:5.2f}ms "
+            f"shader={self.profile_shader_overlay_ms:5.2f}ms "
+            f"moon={moon_state} r={self.profile_moon_light_radius:4.0f} s={self.profile_moon_light_strength:0.2f}"
+        )
+
     @staticmethod
     def draw_glow_orb(
         x: float,
@@ -423,11 +817,11 @@ class LightingSystem:
         strength: float,
     ):
         """Zeichnet einen günstigen Pseudo-Bloom über mehrere weiche Ringe."""
-        ring_count = 4
+        ring_count = 5
         for i in range(ring_count, 0, -1):
             t = i / ring_count
-            radius = core_radius + (18.0 * strength) * (1.0 + t * 1.8)
-            alpha = int(22 * strength * (t**1.7))
+            radius = core_radius + (24.0 * strength) * (1.0 + t * 2.0)
+            alpha = int(46 * strength * (t**1.5))
             if alpha <= 0:
                 continue
             arcade.draw_circle_filled(x, y, radius, (glow_color[0], glow_color[1], glow_color[2], alpha))
@@ -441,22 +835,9 @@ class LightingSystem:
         if self.window.camera.position[1] < sea_level_world_y - CELESTIAL_HIDE_BELOW_SEA_TILES * TILE_SIZE:
             return
 
-        def celestial_position(progress: float) -> tuple[float, float]:
-            p = max(0.0, min(1.0, progress))
-            theta = math.pi * p
-            center_x = self.window.width * 0.5
-            # Fixe Bildschirmbahn: Sonne/Mond bleiben visuell stationär,
-            # unabhängig von der vertikalen Kameraposition.
-            center_y = self.window.height * 0.12
-            radius_x = self.window.width * 0.62
-            radius_y = self.window.height * 0.64
-            x = center_x + radius_x * math.cos(theta)
-            y = center_y + radius_y * math.sin(theta)
-            return x, y
-
         sun_progress = (self.window.time_of_day - 0.25) / 0.5
         if 0.0 <= sun_progress <= 1.0:
-            sun_x, sun_y = celestial_position(sun_progress)
+            sun_x, sun_y = self._celestial_screen_position(sun_progress)
             if self.sun_sprite is not None:
                 self.sun_sprite.center_x = sun_x
                 self.sun_sprite.center_y = sun_y
@@ -466,20 +847,25 @@ class LightingSystem:
             else:
                 arcade.draw_circle_filled(sun_x, sun_y, 34, (255, 236, 130, 255))
 
-        moon_progress: float | None = None
-        if self.window.time_of_day >= 0.75:
-            moon_progress = (self.window.time_of_day - 0.75) / 0.5
-        elif self.window.time_of_day < 0.25:
-            moon_progress = (self.window.time_of_day + 0.25) / 0.5
+    def draw_moon_no_ambient(self):
+        """Zeichnet den Mond mit Originaltextur in einem separaten Pass ohne Ambient-Tint."""
+        if self.sky_background_blend() > 0.65:
+            return
 
-        if moon_progress is not None:
-            moon_x, moon_y = celestial_position(moon_progress)
-            self.draw_glow_orb(moon_x, moon_y, 26, (170, 208, 255), strength=0.78)
-            if self.moon_sprite is not None:
-                self.moon_sprite.center_x = moon_x
-                self.moon_sprite.center_y = moon_y
-                self.moon_sprite.alpha = 255
-                arcade.draw_sprite(self.moon_sprite)
-            else:
-                arcade.draw_circle_filled(moon_x, moon_y, 26, (214, 226, 255, 235))
-                arcade.draw_circle_filled(moon_x + 7, moon_y + 2, 19, (12, 20, 42, 220))
+        sea_level_world_y = (SEA_LEVEL + 1.0) * TILE_SIZE
+        if self.window.camera.position[1] < sea_level_world_y - CELESTIAL_HIDE_BELOW_SEA_TILES * TILE_SIZE:
+            return
+
+        moon_screen_pos = self._moon_screen_position()
+        if moon_screen_pos is None:
+            return
+
+        moon_x, moon_y = moon_screen_pos
+        if self.moon_sprite is not None:
+            self.moon_sprite.center_x = moon_x
+            self.moon_sprite.center_y = moon_y
+            self.moon_sprite.color = (255, 255, 255)
+            self.moon_sprite.alpha = 255
+            arcade.draw_sprite(self.moon_sprite)
+        else:
+            arcade.draw_circle_filled(moon_x, moon_y, 26, (245, 248, 255, 255))
