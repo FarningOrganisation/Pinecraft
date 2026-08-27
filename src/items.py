@@ -4,6 +4,7 @@ from pathlib import Path
 
 import arcade
 from paths import textures_dir
+from resource_manager import resource_manager
 
 ITEM_ID_START = 1024
 
@@ -106,7 +107,7 @@ def _item_texture_path(item_definition: dict) -> Path:
 
 
 ITEM_TEXTURES = {
-    item_id: arcade.load_texture(_item_texture_path(item))
+    item_id: resource_manager.load_texture(_item_texture_path(item))
     for item_id, item in ITEMS.items()
 }
 

@@ -10,6 +10,7 @@ import math
 import arcade
 
 from animated_sprite import AnimatedSprite
+from resource_manager import resource_manager
 from blocks import (
     AIR, DIRT, GRASS, OAK, STONE, SAND,
     get_block_drop_id, 
@@ -39,7 +40,7 @@ from world import World, world_to_chunk_and_local
 def _character_frames(*file_names):
     """Lädt eine Liste von Charakter-Texturen aus dem assets-Verzeichnis."""
     base_dir = textures_dir("characters")
-    return [arcade.load_texture(base_dir / name) for name in file_names]
+    return [resource_manager.load_texture(base_dir / name) for name in file_names]
 
 
 class Player(AnimatedSprite):
@@ -161,11 +162,11 @@ class Player(AnimatedSprite):
         self._attack_textures = _character_frames("steve_mining01.png", "steve_mining02.png")
         crack_texture_dir = textures_dir("cracks")
         self._crack_textures = [
-            arcade.load_texture(crack_texture_dir / "crack1.png"),
-            arcade.load_texture(crack_texture_dir / "crack2.png"),
-            arcade.load_texture(crack_texture_dir / "crack3.png"),
-            arcade.load_texture(crack_texture_dir / "crack4.png"),
-            arcade.load_texture(crack_texture_dir / "crack5.png"),
+            resource_manager.load_texture(crack_texture_dir / "crack1.png"),
+            resource_manager.load_texture(crack_texture_dir / "crack2.png"),
+            resource_manager.load_texture(crack_texture_dir / "crack3.png"),
+            resource_manager.load_texture(crack_texture_dir / "crack4.png"),
+            resource_manager.load_texture(crack_texture_dir / "crack5.png"),
         ]
         self.attack_animation = SpriteAnimation(self._attack_textures, fps=5.0 / 0.35, loop=False)
         self.attack_animation.visible = False

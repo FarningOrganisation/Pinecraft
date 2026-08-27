@@ -10,6 +10,8 @@ from typing import Iterable
 
 import arcade
 
+from resource_manager import resource_manager
+
 
 class SpriteAnimation(arcade.Sprite):
     """Eine einzelne Animation mit Bildfolgen.
@@ -43,7 +45,7 @@ class SpriteAnimation(arcade.Sprite):
             if isinstance(frame, arcade.Texture):
                 normalized.append(frame)
             elif isinstance(frame, (str, Path)):
-                normalized.append(arcade.load_texture(frame))
+                normalized.append(resource_manager.load_texture(frame))
             else:
                 raise TypeError(
                     "Frame muss ein Pfad, ein Path-Objekt oder eine Arcade-Texture sein."

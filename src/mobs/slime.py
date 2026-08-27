@@ -6,6 +6,7 @@ import math
 
 import arcade
 from paths import textures_dir
+from resource_manager import resource_manager
 
 from mobs.monster import Monster
 from sprite_animation import SpriteAnimation
@@ -17,8 +18,8 @@ class Slime(Monster):
 
     def __init__(self, world, x: float, y: float, health: int = 3):
         enemy_texture_dir = textures_dir("mobs")
-        idle_texture = arcade.load_texture(enemy_texture_dir / "slimeBlue.png")
-        move_texture = arcade.load_texture(enemy_texture_dir / "slimeBlue_move.png")
+        idle_texture = resource_manager.load_texture(enemy_texture_dir / "slimeBlue.png")
+        move_texture = resource_manager.load_texture(enemy_texture_dir / "slimeBlue_move.png")
 
         animations = {
             "idle": SpriteAnimation([idle_texture, move_texture], fps=1.5, loop=True),

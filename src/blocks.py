@@ -1,9 +1,11 @@
 """Block-Definitionen und Texturen für Pinecraft."""
 
 import math
+from pathlib import Path
 
 import arcade
 from paths import textures_dir
+from resource_manager import resource_manager
 
 AIR = 0
 GRASS = 1
@@ -117,6 +119,6 @@ def is_block_skylight_surface(block_id: int) -> bool:
 
 TEXTURE_DIR = textures_dir("blocks")
 BLOCK_TEXTURES = {
-    block_id: arcade.load_texture(TEXTURE_DIR / info["texture"])
+    block_id: resource_manager.load_texture_in_textures(Path("blocks") / info["texture"])
     for block_id, info in BLOCKS.items()
 }

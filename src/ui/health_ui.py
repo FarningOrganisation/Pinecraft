@@ -3,6 +3,7 @@
 import arcade
 
 from paths import textures_dir
+from resource_manager import resource_manager
 
 
 class HealthUI:
@@ -11,8 +12,8 @@ class HealthUI:
     def __init__(self, player):
         self.player = player
         ui_texture_dir = textures_dir("ui")
-        self.heart_full_texture = arcade.load_texture(ui_texture_dir / "heart_full.png")
-        self.heart_empty_texture = arcade.load_texture(ui_texture_dir / "heart_empty.png")
+        self.heart_full_texture = resource_manager.load_texture(ui_texture_dir / "heart_full.png")
+        self.heart_empty_texture = resource_manager.load_texture(ui_texture_dir / "heart_empty.png")
         self.heart_size = 16
         self.heart_gap = 2
 
