@@ -305,9 +305,10 @@ class World:
         center_x: float | None = None,
         center_y: float | None = None,
         player=None,
+        update_chunks: bool = True,
     ):
         """Zentrale Welt-Update-Schleife; die Spielklasse ruft das pro Frame auf."""
-        if center_x is not None:
+        if update_chunks and center_x is not None:
             self.update_loaded_chunks(center_x)
         self.update_falling_blocks(delta_time, center_x=center_x, player=player)
 
