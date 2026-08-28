@@ -2,6 +2,7 @@
 
 from array import array
 import math
+import random
 import time
 
 import arcade
@@ -66,6 +67,12 @@ class LightingSystem:
                     return max(0.0, 1.0 - abs(x - center) / width);
                 }
 
+                float hash21(vec2 p) {
+                    p = fract(p * vec2(123.34, 345.45));
+                    p += dot(p, p + 34.345);
+                    return fract(p.x * p.y);
+                }
+
                 void main() {
                     float y = clamp(uv.y, 0.0, 1.0);
 
@@ -92,6 +99,19 @@ class LightingSystem:
                     float horizon_band = pow(1.0 - vertical, 1.9);
                     float twilight_strength = twilight * (0.45 + 0.55 * (1.0 - u_day_factor));
                     color = mix(color, dusk_tint, twilight_strength * horizon_band * 0.62);
+
+                    // Dezente, kleine Sterne nur nachts und vor allem im oberen Himmel.
+                    float night_strength = pow(max(0.0, 1.0 - u_day_factor), 1.55);
+                    vec2 star_uv = uv * vec2(210.0, 130.0);
+                    vec2 star_cell = floor(star_uv);
+                    vec2 star_local = fract(star_uv) - 0.5;
+                    float star_seed = hash21(star_cell);
+                    float star_mask = step(0.9945, star_seed);
+                    float star_dist = length(star_local);
+                    float star_core = (1.0 - smoothstep(0.02, 0.11, star_dist)) * star_mask;
+                    float twinkle = 0.72 + 0.28 * sin((u_time_of_day * 6.2831853 * 8.0) + star_seed * 40.0);
+                    float star_visibility = night_strength * pow(y, 1.7) * (1.0 - min(1.0, u_underground * 1.25));
+                    color += vec3(0.92, 0.95, 1.0) * star_core * twinkle * star_visibility * 0.85;
 
                     fragColor = vec4(color, 1.0);
                 }
@@ -157,6 +177,7 @@ class LightingSystem:
                     float cave_darkness = smoothstep(56.0, 520.0, depth);
                     float day_strength = mix(0.72, 0.96, u_day_factor);
                     cave_darkness = clamp(cave_darkness * day_strength, 0.0, 0.92);
+                    float local_light_receiver = smoothstep(10.0, 70.0, depth);
 
                     // Nacht heller, Twilight-Übergang breiter und weicher.
                     float ambient = mix(0.48, 1.0, pow(clamp(u_day_factor, 0.0, 1.0), 1.55));
@@ -171,13 +192,13 @@ class LightingSystem:
                         float radius = max(1.0, u_light_radii[i]);
                         float dist = distance(world_pos, u_light_positions[i]);
                         float falloff = 1.0 - smoothstep(radius * 0.10, radius, dist);
-                        torch_light += falloff * 0.92;
+                        torch_light += falloff * 0.92 * local_light_receiver;
                     }
 
                     float moon_light = 0.0;
                     if (u_moon_light_enabled > 0) {
                         float md = distance(world_pos, u_moon_light_position);
-                        moon_light = (1.0 - smoothstep(u_moon_light_radius * 0.04, u_moon_light_radius, md)) * u_moon_light_strength;
+                        moon_light = (1.0 - smoothstep(u_moon_light_radius * 0.04, u_moon_light_radius, md)) * u_moon_light_strength * local_light_receiver;
                     }
 
                     vec3 final_light = vec3(base_light + torch_light);
@@ -212,6 +233,18 @@ class LightingSystem:
             self.moon_sprite = arcade.Sprite(str(moon_path), scale=1.0)
             self.moon_sprite.width = 35
             self.moon_sprite.height = 35
+
+        # Deterministische Sternkarte im Bildschirmraum (normierte Koordinaten).
+        rng = random.Random(24681357)
+        self._star_field: list[tuple[float, float, float, float]] = []
+        for _ in range(180):
+            sx = rng.random()
+            sy = rng.random()
+            if sy < 0.30:
+                continue
+            size = 0.7 + rng.random() * 1.2
+            phase = rng.random() * math.tau
+            self._star_field.append((sx, sy, size, phase))
 
     @staticmethod
     def lerp_color(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
@@ -869,3 +902,66 @@ class LightingSystem:
             arcade.draw_sprite(self.moon_sprite)
         else:
             arcade.draw_circle_filled(moon_x, moon_y, 26, (245, 248, 255, 255))
+
+    def draw_stars_no_ambient(self):
+        """Zeichnet kleine Sterne ohne globales Ambient; lokale Lichter dimmen Sterne."""
+        if self.sky_background_blend() > 0.58:
+            return
+
+        night_strength = max(0.0, 1.0 - self.day_factor())
+        if night_strength <= 0.18:
+            return
+
+        # Sterne werden nur nachts sichtbar, aber nicht vom globalen Ambient beeinflusst.
+        night_alpha_scale = min(1.0, max(0.0, (night_strength - 0.18) / 0.62))
+
+        def smoothstep_py(edge0: float, edge1: float, x: float) -> float:
+            if edge1 <= edge0:
+                return 1.0 if x >= edge1 else 0.0
+            t = max(0.0, min(1.0, (x - edge0) / (edge1 - edge0)))
+            return t * t * (3.0 - 2.0 * t)
+
+        camera_x, camera_y = self.window.camera.position
+        half_w = self.window.width * 0.5
+        half_h = self.window.height * 0.5
+        torch_lights = self._collect_shader_torch_lights(MAX_SHADER_TORCH_LIGHTS)
+        moon_light = self._moon_world_light()
+        ambient_color = self.ambient_color()
+        ambient_luma = max(0.05, (ambient_color[0] + ambient_color[1] + ambient_color[2]) / (3.0 * 255.0))
+        ambient_compensation = min(3.0, 1.0 / ambient_luma)
+
+        for sx, sy, size, phase in self._star_field:
+            # X-Parallaxe: langsamer Drift relativ zur Kamera-X.
+            # Die Sternkarte wiederholt sich erst nach zwei Bildschirmbreiten.
+            repeat_width = self.window.width * 2.0
+            x = (sx * repeat_width - camera_x * 0.018) % repeat_width
+            if x > self.window.width:
+                continue
+            y = sy * self.window.height
+            star_brightness = 0.72 + 0.28 * math.sin(phase)
+            base_alpha = (120 + 95 * star_brightness) * night_alpha_scale
+
+            world_x = camera_x + (x - half_w)
+            world_y = camera_y + (y - half_h)
+            local_dim = 0.0
+
+            for light_x, light_y, radius in torch_lights:
+                r = max(1.0, radius)
+                dist = math.hypot(world_x - light_x, world_y - light_y)
+                falloff = 1.0 - smoothstep_py(r * 0.10, r, dist)
+                local_dim += falloff * 0.92
+
+            if moon_light is not None:
+                moon_x, moon_y, moon_radius, moon_strength = moon_light
+                moon_dist = math.hypot(world_x - moon_x, world_y - moon_y)
+                moon_falloff = 1.0 - smoothstep_py(moon_radius * 0.04, moon_radius, moon_dist)
+                local_dim += moon_falloff * moon_strength
+
+            local_dim = max(0.0, min(0.95, local_dim))
+            alpha = int(base_alpha * (1.0 - local_dim) * ambient_compensation)
+            alpha = max(0, min(255, alpha))
+            if alpha <= 8:
+                continue
+
+            radius = size
+            arcade.draw_circle_filled(x, y, radius, (238, 244, 255, alpha))

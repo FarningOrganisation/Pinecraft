@@ -473,6 +473,10 @@ class GameWindow(arcade.Window):
         """Wrapper to draw moon texture in a non-ambient pass."""
         self.lighting.draw_moon_no_ambient()
 
+    def _draw_stars_no_ambient(self):
+        """Wrapper to draw stars in a non-ambient pass."""
+        self.lighting.draw_stars_no_ambient()
+
     def _spawn_dropped_item(self, entry_id: int, tile_x: int, tile_y: int):
         """Erzeugt ein physisches Item an der Blockposition."""
         texture = self.player.inventory.get_texture(entry_id)
@@ -1058,10 +1062,11 @@ class GameWindow(arcade.Window):
 
         self.clear((0, 0, 0, 255))
 
-        self.camera.use()
-
         with self.light_layer:
             self._draw_sky_shader()
+
+            self.ui_camera.use()
+            self._draw_stars_no_ambient()
 
             self.ui_camera.use()
             self._draw_celestials()
