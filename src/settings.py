@@ -4,6 +4,7 @@ Diese Datei bleibt bewusst klein und verständlich für Anfängerinnen und
 Anfänger. Später können hier z. B. Fenstergröße, Spielregeln oder
 Konstanten für Blöcke ergänzt werden.
 """
+import random
 
 SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 720
@@ -12,7 +13,7 @@ TARGET_FPS = 60
 BACKGROUND_COLOR = (135, 206, 235, 255)  # Heller Himmelblau in RGBA
 
 # TODO_STUDENT (⭐): Ändere den Seed und beobachte die Welt.
-WORLD_SEED = 11
+WORLD_SEED = random.randint(1,100000)
 
 # TODO_STUDENT (⭐⭐⭐): Für Startmenü-Challenge auf True setzen oder zur Laufzeit umschalten.
 START_FULLSCREEN = False

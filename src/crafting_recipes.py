@@ -1,6 +1,6 @@
 """3x3-Crafting-Rezepte für Pinecraft."""
 
-from blocks import AIR, OAK, OAK_PLANKS, COBBLESTONE
+from blocks import AIR, OAK, OAK_PLANKS, COBBLESTONE, COBBLESTONE_BG
 from items import (
     CHARCOAL,
     STONE_PICKAXE,
@@ -63,6 +63,16 @@ CRAFTING_RECIPES = {
         ],
         "count": 1,
     },
+
+    COBBLESTONE_BG: {
+        "pattern": [
+            [AIR, AIR, AIR],
+            [AIR, COBBLESTONE, AIR],
+            [AIR, AIR, AIR]
+        ],
+        "count": 1
+    },
+
     # TODO_STUDENT (⭐⭐): Rezept fuer Stone Sword als 3x3-Muster ergaenzen.
     # TODO_STUDENT (⭐⭐⭐): Rezepte fuer Iron/Gold/Diamond Pickaxe ergaenzen.
 }

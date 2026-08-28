@@ -57,7 +57,7 @@ from world_generation import (
 )
 
 # Choose the mob type spawned via the debug key from here instead of scrolling down.
-DEBUG_SPAWN_MOB_CLASS = Zombie
+DEBUG_SPAWN_MOB_CLASS = Slime
 
 
 class GameWindow(arcade.Window):

@@ -401,6 +401,8 @@ class Inventory:
                 candidate.count = half
                 slot.count -= half
                 return True
+        
+        for candidate_index in range(len(self.slots)):
             if candidate.item == slot.item and candidate.count < self.max_stack_for(slot.item):
                 space = self.max_stack_for(slot.item) - candidate.count
                 moved = min(half, space)

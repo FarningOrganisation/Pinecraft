@@ -26,7 +26,7 @@ ITEMS = {
         "texture": "stone_pickaxe.png",
         "item_type": "tool",  # consumable, tool, material
         "max_stack": 1,
-        "mining_speed": 2,
+        "mining_speed": 1000,
     },
     IRON_PICKAXE: {
         "item_id": IRON_PICKAXE,
