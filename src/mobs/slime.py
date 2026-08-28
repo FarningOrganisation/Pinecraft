@@ -8,7 +8,6 @@ import arcade
 from paths import textures_dir
 
 from mobs.monster import Monster
-from mobs.mob_physics import update_enemy_physics
 from sprite_animation import SpriteAnimation
 
 
@@ -68,6 +67,7 @@ class Slime(Monster):
     def update_ai(self, delta_time: float, player):
         """Handles slime movement, state changes, and contact damage."""
         if not self.alive:
+            self.vanish_after_death_timer = max(0.0, self.vanish_after_death_timer - delta_time)
             return
 
         if self.stun_timer > 0.0:
@@ -89,8 +89,3 @@ class Slime(Monster):
         else:
             self.change_x = 0.0
             self.set_state("idle")
-
-        update_enemy_physics(self, delta_time)
-
-        self.handle_contact_damage(player, delta_time)
-        super().update(delta_time)

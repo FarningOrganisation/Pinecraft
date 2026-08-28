@@ -13,15 +13,37 @@ def _non_air_cells(grid):
     }
 
 
+def _normalize_pattern(pattern):
+    """Normalisiert ein Rezeptmuster zu einer rechteckigen Matrix mit AIR-Fill."""
+    if not isinstance(pattern, list) or not pattern:
+        return None
+    if any(not isinstance(row, list) for row in pattern):
+        return None
+
+    width = max((len(row) for row in pattern), default=0)
+    height = len(pattern)
+    if width <= 0:
+        return None
+    if width > 3 or height > 3:
+        return None
+
+    normalized = []
+    for row in pattern:
+        normalized.append(row + [AIR] * (width - len(row)))
+    return normalized
+
+
 def matches_pattern(grid, pattern):
     """Prüft, ob ein Rezept-Muster an beliebiger Position im 3x3-Grid passt."""
     if len(grid) != 3 or any(len(row) != 3 for row in grid):
         return False, None
-    if len(pattern) != 3 or any(len(row) != 3 for row in pattern):
+
+    normalized_pattern = _normalize_pattern(pattern)
+    if normalized_pattern is None:
         return False, None
 
     grid_cells = _non_air_cells(grid)
-    pattern_cells = _non_air_cells(pattern)
+    pattern_cells = _non_air_cells(normalized_pattern)
 
     if not pattern_cells:
         return (not grid_cells), (0, 0)

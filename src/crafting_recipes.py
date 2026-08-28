@@ -65,11 +65,7 @@ CRAFTING_RECIPES = {
     },
 
     COBBLESTONE_BG: {
-        "pattern": [
-            [AIR, AIR, AIR],
-            [AIR, COBBLESTONE, AIR],
-            [AIR, AIR, AIR]
-        ],
+        "pattern": [[COBBLESTONE]],
         "count": 1
     },
 

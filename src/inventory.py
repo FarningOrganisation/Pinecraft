@@ -403,6 +403,9 @@ class Inventory:
                 return True
         
         for candidate_index in range(len(self.slots)):
+            if candidate_index == index:
+                continue
+            candidate = self.slots[candidate_index]
             if candidate.item == slot.item and candidate.count < self.max_stack_for(slot.item):
                 space = self.max_stack_for(slot.item) - candidate.count
                 moved = min(half, space)

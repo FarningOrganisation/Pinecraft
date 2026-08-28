@@ -104,7 +104,7 @@ class InventoryUI:
 
     def _crafting_result_value(self):
         """Gibt das aktuelle Crafting-Ergebnis oder None zurück."""
-        result_item, _, _, _ = self._crafting_result_info()
+        result_item, _, _, _, _ = self._crafting_result_info()
         return result_item
 
     def _current_crafting_grid(self):
@@ -129,9 +129,8 @@ class InventoryUI:
         crafts_possible = None
         row_offset, col_offset = offset
 
-        for row in range(3):
-            for col in range(3):
-                required_item = pattern[row][col]
+        for row, pattern_row in enumerate(pattern):
+            for col, required_item in enumerate(pattern_row):
                 if required_item == AIR:
                     continue
 
@@ -154,16 +153,17 @@ class InventoryUI:
         return 0 if crafts_possible is None else crafts_possible
 
     def _crafting_result_info(self):
-        """Gibt (Ergebnisitem, Ausgabemenge pro Craft, crafts_possible, pattern) zurück."""
+        """Gibt (Ergebnisitem, Ausgabemenge pro Craft, crafts_possible, pattern, offset) zurück."""
         result_item, pattern, output_count, offset = self._find_matching_recipe()
         if result_item is None or pattern is None or output_count <= 0:
-            return None, 0, 0, None
+            return None, 0, 0, None, (0, 0)
 
-        crafts_possible = self._crafts_possible_for_pattern(pattern, offset or (0, 0))
+        used_offset = offset or (0, 0)
+        crafts_possible = self._crafts_possible_for_pattern(pattern, used_offset)
         if crafts_possible <= 0:
-            return None, 0, 0, None
+            return None, 0, 0, None, used_offset
 
-        return result_item, output_count, crafts_possible, pattern
+        return result_item, output_count, crafts_possible, pattern, used_offset
 
     def _consume_crafting_materials(self, crafts_count: int, pattern, offset=(0, 0)):
         """Verbraucht Materialien direkt aus den Crafting-Slots."""
@@ -172,9 +172,8 @@ class InventoryUI:
 
         row_offset, col_offset = offset
 
-        for row in range(3):
-            for col in range(3):
-                required_item = pattern[row][col]
+        for row, pattern_row in enumerate(pattern):
+            for col, required_item in enumerate(pattern_row):
                 if required_item == AIR:
                     continue
 
@@ -250,7 +249,7 @@ class InventoryUI:
 
         result_rect = self._result_slot_rect()
         if result_rect.left <= x <= result_rect.right and result_rect.bottom <= y <= result_rect.top:
-            result_item, output_count, crafts_possible, pattern = self._crafting_result_info()
+            result_item, output_count, crafts_possible, pattern, offset = self._crafting_result_info()
             if result_item is None or output_count <= 0 or crafts_possible <= 0 or pattern is None:
                 return False
             if button == arcade.MOUSE_BUTTON_LEFT:
@@ -382,7 +381,7 @@ class InventoryUI:
         arcade.draw_text("→", arrow_x, arrow_top, arcade.color.WHITE, 36, anchor_x="center", anchor_y="center")
 
         result_rect = self._result_slot_rect()
-        result_item, output_count, crafts_possible, _ = self._crafting_result_info()
+        result_item, output_count, crafts_possible, _, _ = self._crafting_result_info()
         result_fill = (40, 40, 45, 200)
         result_border = arcade.color.WHITE if crafts_possible > 0 else (180, 180, 180, 180)
         arcade.draw_rect_filled(result_rect, result_fill)

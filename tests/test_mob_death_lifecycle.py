@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from game import GameWindow
+from mobs.slime import Slime
 from mobs.zombie import Zombie
 
 
@@ -76,6 +77,17 @@ class MobDeathLifecycleTests(unittest.TestCase):
             random.choice = original_choice
 
         self.assertIn(Zombie, spawned_classes)
+
+    def test_dead_slime_counts_down_vanish_timer(self):
+        slime = Slime.__new__(Slime)
+        slime._position = (0.0, 0.0)
+        slime._velocity = (0.0, 0.0)
+        slime.alive = False
+        slime.vanish_after_death_timer = 0.5
+
+        slime.update_ai(0.1, player=None)
+
+        self.assertAlmostEqual(slime.vanish_after_death_timer, 0.4, places=6)
 
 
 if __name__ == "__main__":

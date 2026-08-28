@@ -2,6 +2,7 @@ from mobs.mob import Mob
 from physics import aabb_from_center, aabb_overlap
 import math
 
+
 class Monster(Mob):
     """A mob that can detect, chase, and damage the player."""
 
@@ -43,15 +44,60 @@ class Monster(Mob):
         self.facing_right = direction >= 0
         effective_speed = self.speed if speed is None else speed
         dx = abs(player.center_x - self.center_x)
-        if dx <= 0:
+        if dx <= self.attack_range:
+            self.change_x = 0.0
             return
 
-        step = min(dx, effective_speed * delta_time)
-        self.center_x += direction * step
         self.change_x = direction * effective_speed
 
         if self.center_y < 0:
             self.center_y = 0.0
+
+    def _preferred_move_state(self) -> str | None:
+        """Wählt einen verfügbaren Bewegungszustand für Monster-Animationen."""
+        if "walking" in self.animations:
+            return "walking"
+        if "move" in self.animations:
+            return "move"
+        return None
+
+    def _preferred_idle_state(self) -> str | None:
+        """Wählt einen verfügbaren Idle-Zustand."""
+        if "idle" in self.animations:
+            return "idle"
+        return self._preferred_move_state()
+
+    def update_ai(self, delta_time: float, player):
+        """Hostile default AI: chase player in range, otherwise wander."""
+        if not self.alive:
+            self.vanish_after_death_timer = max(0.0, self.vanish_after_death_timer - delta_time)
+            return
+
+        if self.stun_timer > 0.0:
+            self.stun_timer = max(0.0, self.stun_timer - delta_time)
+            self.change_x *= 0.9
+            return
+
+        if self.aggro_timer > 0.0:
+            self.aggro_timer = max(0.0, self.aggro_timer - delta_time)
+
+        self.alerted = self._can_see_player(player)
+        if self.alerted:
+            self.move_toward_player(player, delta_time)
+            move_state = self._preferred_move_state()
+            if move_state is not None:
+                self.set_state(move_state)
+            return
+
+        self._update_wander_behavior(delta_time)
+        if abs(self.change_x) > 0.1:
+            move_state = self._preferred_move_state()
+            if move_state is not None:
+                self.set_state(move_state)
+        else:
+            idle_state = self._preferred_idle_state()
+            if idle_state is not None:
+                self.set_state(idle_state)
 
     def update(self, delta_time: float, player=None):
         """Monster update: shared mob logic + attack contact damage."""
