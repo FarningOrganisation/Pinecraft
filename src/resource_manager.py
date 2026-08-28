@@ -7,7 +7,7 @@ from typing import Any
 
 import arcade
 
-from paths import ASSETS_DIR
+from paths import ASSETS_DIR, PROJECT_ROOT
 
 
 class ResourceManager:
@@ -19,8 +19,17 @@ class ResourceManager:
 
     def _normalize_path(self, path: str | Path) -> Path:
         path_obj = Path(path)
-        if not path_obj.is_absolute():
-            path_obj = (ASSETS_DIR / path_obj).resolve()
+        if path_obj.is_absolute():
+            return path_obj.resolve()
+
+        # Unterstützt beide relativen Konventionen:
+        # - assets/... (projektrelativ)
+        # - textures/... oder sounds/... (assets-relativ)
+        first_part = path_obj.parts[0] if path_obj.parts else ""
+        if first_part == "assets":
+            path_obj = PROJECT_ROOT / path_obj
+        else:
+            path_obj = ASSETS_DIR / path_obj
         return path_obj
 
     def _cache_key(self, path: str | Path) -> str:
@@ -44,16 +53,18 @@ class ResourceManager:
 
     def load_texture(self, path: str | Path) -> arcade.Texture:
         """Load a texture from an arbitrary path and cache it by normalized path."""
-        key = self._cache_key(path)
+        normalized_path = self._normalize_path(path)
+        key = str(normalized_path)
         if key not in self._texture_cache:
-            self._texture_cache[key] = arcade.load_texture(path)
+            self._texture_cache[key] = arcade.load_texture(normalized_path)
         return self._texture_cache[key]
 
     def load_sound(self, path: str | Path) -> arcade.Sound:
         """Load a sound from an arbitrary path and cache it by normalized path."""
-        key = self._cache_key(path)
+        normalized_path = self._normalize_path(path)
+        key = str(normalized_path)
         if key not in self._sound_cache:
-            self._sound_cache[key] = arcade.Sound(path)
+            self._sound_cache[key] = arcade.Sound(normalized_path)
         return self._sound_cache[key]
 
 

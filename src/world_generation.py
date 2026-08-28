@@ -298,15 +298,25 @@ class WorldGenerator:
         return 4 + (value % 3)
 
     def _is_ocean_column(self, world_x: int, surface_y: int) -> bool:
-        """Deterministisch seltenere Ozeanspalten unterhalb des Meeresspiegels."""
+        """Deterministisch zusammenhängende Ozeanspalten unterhalb des Meeresspiegels."""
         if surface_y >= SEA_LEVEL:
             return False
 
-        biome = self._biome_value(world_x)
-        ocean_mask = self._value_noise_2d(world_x, SEA_LEVEL, cell_size=140, salt=1601)
-        depth = min(1.0, max(0.0, (SEA_LEVEL - surface_y) / 12.0))
-        threshold = 0.78 - 0.22 * depth
-        return biome < -0.18 and ocean_mask > threshold
+        # Tiefe Täler unterhalb des Meeresspiegels sollen deutlich häufiger Wasser
+        # bekommen. Das Biome wirkt nur als weicher Bias statt als hartes Gate,
+        # damit Spawn-Bereiche nicht komplett trocken ausfallen.
+        depth = min(1.0, max(0.0, (SEA_LEVEL - surface_y) / 14.0))
+        biome = max(-1.0, min(1.0, self._biome_value(world_x)))
+
+        # Makro-Maske für breite Ozeanflächen plus feine Struktur für Kanten.
+        ocean_mask = self._value_noise_2d(world_x, SEA_LEVEL, cell_size=150, salt=1601)
+        coastal_detail = self._value_noise_2d(world_x, SEA_LEVEL, cell_size=26, salt=1603)
+
+        threshold = 0.70 - 0.24 * depth + max(0.0, biome) * 0.14
+        if biome > 0.55:
+            threshold += 0.08
+
+        return (ocean_mask + 0.18 * coastal_detail) > threshold
 
     def generate_chunk(self, world: World, chunk_x: int):
         """Erzeugt einen deterministischen Chunk für eine gegebene Chunk-Koordinate."""

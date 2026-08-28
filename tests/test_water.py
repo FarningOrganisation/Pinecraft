@@ -9,7 +9,7 @@ import arcade
 from blocks import AIR, GRASS, LEAVES, OAK, SAND, STONE
 from game import GameWindow
 from player import Player
-from settings import CHUNK_WIDTH, TILE_SIZE
+from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_SEED
 from world import World
 from world_generation import (
     COASTAL_BEACH_BAND,
@@ -405,6 +405,25 @@ class WaterTests(unittest.TestCase):
                 if surface_y < SEA_LEVEL and y > surface_y and y <= SEA_LEVEL:
                     found_surface_water = True
                     break
+            if found_surface_water:
+                break
+
+        self.assertTrue(found_surface_water)
+
+    def test_default_seed_has_surface_water_near_spawn(self):
+        world = World(seed=WORLD_SEED)
+
+        found_surface_water = False
+        for chunk_x in range(-3, 4):
+            chunk = world.generate_chunk(chunk_x)
+            for local_x in range(chunk.width):
+                surface_y = world.generator.terrain_height(chunk_x, local_x)
+                if surface_y >= SEA_LEVEL:
+                    continue
+                if chunk.get_water(local_x, surface_y + 1) <= 0.0:
+                    continue
+                found_surface_water = True
+                break
             if found_surface_water:
                 break
 
