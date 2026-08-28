@@ -34,8 +34,15 @@ from world import World, world_to_chunk_and_local
 WATER_TEXTURE = resource_manager.load_texture_in_textures(Path("blocks") / "water.png")
 WATER_VISUAL_STEPS = 8
 WATER_RENDER_THRESHOLD = 0.02
+LAVA_TEXTURE = resource_manager.load_texture_in_textures(Path("blocks") / "lava.png")
+LAVA_VISUAL_STEPS = 8
+LAVA_RENDER_THRESHOLD = 0.02
 SEA_LEVEL = 130
 UNDERGROUND_WATER_MAX_Y = 102
+UNDERGROUND_WATER_PREFERRED_Y = 72
+UNDERGROUND_WATER_PREFERRED_HALF_SPAN = 36
+UNDERGROUND_LAVA_MAX_Y = 74
+UNDERGROUND_LAVA_MIN_Y = 6
 COASTAL_BEACH_BAND = 2
 
 
@@ -173,6 +180,32 @@ class WorldGenerator:
             return COAL_ORE
         return STONE
 
+    def _pick_underground_liquid(self, world_x: int, y: int) -> str | None:
+        """Wählt für eine Höhlenzelle deterministisch Wasser oder Lava nach Tiefe."""
+        if y <= UNDERGROUND_LAVA_MIN_Y:
+            return None
+
+        depth_norm = max(0.0, min(1.0, 1.0 - (y / float(UNDERGROUND_WATER_MAX_Y))))
+
+        # Wasser bevorzugt mittlere Tiefen als glatte Glocke um einen Zielbereich.
+        medium_water_factor = 1.0 - abs(y - UNDERGROUND_WATER_PREFERRED_Y) / float(UNDERGROUND_WATER_PREFERRED_HALF_SPAN)
+        medium_water_factor = max(0.0, min(1.0, medium_water_factor))
+
+        # Lava bevorzugt tiefe Schichten deutlich stärker.
+        lava_depth_factor = max(0.0, min(1.0, (UNDERGROUND_LAVA_MAX_Y - y) / float(UNDERGROUND_LAVA_MAX_Y - UNDERGROUND_LAVA_MIN_Y)))
+        lava_depth_factor = lava_depth_factor**1.6
+
+        selector = self._value_noise_2d(world_x, y, cell_size=14, salt=1217)
+
+        lava_threshold = 0.14 + 0.56 * lava_depth_factor
+        water_threshold = 0.76 - 0.34 * medium_water_factor - 0.08 * depth_norm
+
+        if y <= UNDERGROUND_LAVA_MAX_Y and selector < lava_threshold:
+            return "lava"
+        if y <= UNDERGROUND_WATER_MAX_Y and selector > water_threshold:
+            return "water"
+        return None
+
     def _biome_value(self, world_x: int) -> float:
         """Langsame Biome-Kurve in etwa [-1, 1]."""
         low = math.sin((world_x + self.seed) * 0.0038)
@@ -285,7 +318,8 @@ class WorldGenerator:
         saved_blocks = world.get_saved_chunk_blocks(chunk_x)
         if saved_blocks is not None:
             saved_water = world.get_saved_chunk_water(chunk_x) or {}
-            chunk = Chunk(chunk_x=chunk_x, blocks=saved_blocks, water=dict(saved_water))
+            saved_lava = world.get_saved_chunk_lava(chunk_x) or {}
+            chunk = Chunk(chunk_x=chunk_x, blocks=saved_blocks, water=dict(saved_water), lava=dict(saved_lava))
             world.apply_pending_generated_blocks(chunk)
             world.chunks[chunk_x] = chunk
             return chunk
@@ -475,7 +509,7 @@ class WorldGenerator:
                 side = -1 if self._rand01(world_x, salt=97) < 0.5 else 1
                 place_generated(world_x + side, top_leaf_y, LEAVES, replace_air_only=True)
 
-        # Pass 4: Natuerliches Wasser (Meeresspiegel + unterirdische Wasserbecken).
+        # Pass 4: Natuerliche Fluessigkeiten (Meeresspiegel + unterirdische Wasser/Lava-Taschen).
         for local_x in range(chunk.width):
             surface_y = surface_heights[local_x]
             world_x = chunk_x * CHUNK_WIDTH + local_x
@@ -485,10 +519,13 @@ class WorldGenerator:
                     if chunk.get_block(local_x, y) == AIR:
                         chunk.set_water(local_x, y, 1.0)
 
-            for y in range(4, min(UNDERGROUND_WATER_MAX_Y, WORLD_HEIGHT - 2) + 1):
+            underground_max_y = min(max(UNDERGROUND_WATER_MAX_Y, UNDERGROUND_LAVA_MAX_Y), WORLD_HEIGHT - 2)
+            for y in range(4, underground_max_y + 1):
                 if chunk.get_block(local_x, y) != AIR:
                     continue
                 if chunk.get_water(local_x, y) > 0.0:
+                    continue
+                if chunk.get_lava(local_x, y) > 0.0:
                     continue
 
                 below_block = chunk.get_block(local_x, y - 1)
@@ -497,8 +534,13 @@ class WorldGenerator:
 
                 cave_signal = self._value_noise_2d(world_x, y, cell_size=10, salt=1181)
                 pocket_signal = self._value_noise_2d(world_x, y, cell_size=22, salt=1193)
-                # Sichtbare Hoehlenpfuetzen: Wasser auf festen Boeden in Cave-AIR.
-                if cave_signal > 0.66 and pocket_signal > 0.56:
+                if cave_signal <= 0.66 or pocket_signal <= 0.56:
+                    continue
+
+                liquid_type = self._pick_underground_liquid(world_x, y)
+                if liquid_type == "lava":
+                    chunk.set_lava(local_x, y, 1.0)
+                elif liquid_type == "water":
                     chunk.set_water(local_x, y, 1.0)
 
         world.apply_pending_generated_blocks(chunk)
@@ -532,11 +574,13 @@ class WorldGenerator:
             chunk = world.chunks[chunk_x]
             world.save_chunk_blocks(chunk_x, chunk.blocks)
             world.save_chunk_water(chunk_x, chunk.water)
+            world.save_chunk_lava(chunk_x, chunk.lava)
             del world.chunks[chunk_x]
             unloaded_chunks.append(chunk_x)
 
         if unloaded_chunks:
             world.water_system.deactivate_unloaded_chunks(set(world.chunks.keys()))
+            world.lava_system.deactivate_unloaded_chunks(set(world.chunks.keys()))
 
         load_candidates = [chunk_x for chunk_x in range(min_chunk_x, max_chunk_x + 1) if chunk_x not in world.chunks]
         load_candidates.sort(key=lambda cx: abs(cx - current_chunk_x))
@@ -547,6 +591,7 @@ class WorldGenerator:
             self.generate_chunk(world, chunk_x)
             loaded_chunks.append(chunk_x)
             world.water_system.activate_loaded_chunk_water(world, chunk_x)
+            world.lava_system.activate_loaded_chunk_lava(world, chunk_x)
 
         return loaded_chunks, unloaded_chunks
 
@@ -593,6 +638,15 @@ def get_water_render_height(level: float) -> float:
         return 0.0
     visual_level = min(WATER_VISUAL_STEPS, max(1, math.ceil(normalized * WATER_VISUAL_STEPS)))
     return TILE_SIZE * (visual_level / WATER_VISUAL_STEPS)
+
+
+def get_lava_render_height(level: float) -> float:
+    """Returns quantized visible lava height, with a separate rendering threshold."""
+    normalized = max(0.0, min(1.0, float(level)))
+    if normalized < LAVA_RENDER_THRESHOLD:
+        return 0.0
+    visual_level = min(LAVA_VISUAL_STEPS, max(1, math.ceil(normalized * LAVA_VISUAL_STEPS)))
+    return TILE_SIZE * (visual_level / LAVA_VISUAL_STEPS)
 
 
 def build_chunk_sprite_list(chunk_x: int, chunk, min_tile_y: int, max_tile_y: int):
@@ -655,6 +709,45 @@ def build_chunk_water_sprite_list(chunk_x: int, chunk, min_tile_y: int, max_tile
         sprite = arcade.Sprite(WATER_TEXTURE)
         sprite.color = (120, 170, 255)
         sprite.alpha = 128
+        sprite.width = TILE_SIZE
+        sprite.height = height
+        sprite.center_x = (chunk_x * CHUNK_WIDTH + local_x + 0.5) * TILE_SIZE
+        sprite.center_y = (y + (height / TILE_SIZE) / 2.0) * TILE_SIZE
+        sprite_list.append(sprite)
+        sprite_map[(local_x, y)] = sprite
+
+    if include_map:
+        return sprite_list, sprite_map
+    return sprite_list
+
+
+def build_chunk_lava_sprite_list(chunk_x: int, chunk, min_tile_y: int, max_tile_y: int, include_map: bool = False):
+    """Erstellt die Lava-Overlay-Sprites für die sichtbare Welt."""
+    sprite_list = arcade.SpriteList()
+    sprite_map: dict[tuple[int, int], arcade.Sprite] = {}
+    min_y = max(0, min_tile_y)
+    max_y = min(chunk.height - 1, max_tile_y)
+    if min_y > max_y:
+        if include_map:
+            return sprite_list, sprite_map
+        return sprite_list
+
+    for (local_x, y), level in sorted(chunk.lava.items()):
+        if y < min_y or y > max_y:
+            continue
+
+        block_id = chunk.get_block(local_x, y)
+        if block_id != AIR and not is_block_water_passable(block_id):
+            continue
+
+        normalized = max(0.0, min(1.0, float(level)))
+        height = get_lava_render_height(normalized)
+        if height <= 0.0:
+            continue
+
+        sprite = arcade.Sprite(LAVA_TEXTURE)
+        sprite.color = (255, 255, 255)
+        sprite.alpha = 200
         sprite.width = TILE_SIZE
         sprite.height = height
         sprite.center_x = (chunk_x * CHUNK_WIDTH + local_x + 0.5) * TILE_SIZE

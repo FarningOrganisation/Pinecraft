@@ -43,11 +43,16 @@ from settings import (
 )
 from world import World, world_to_chunk_and_local
 from world_generation import (
+    LAVA_RENDER_THRESHOLD,
+    LAVA_TEXTURE,
+    LAVA_VISUAL_STEPS,
     WATER_VISUAL_STEPS,
     WATER_RENDER_THRESHOLD,
     WATER_TEXTURE,
+    build_chunk_lava_sprite_list,
     build_chunk_sprite_list,
     build_chunk_water_sprite_list,
+    get_lava_render_height,
     get_water_render_height,
 )
 
@@ -81,6 +86,8 @@ class GameWindow(arcade.Window):
         self.chunk_sprite_maps: dict[int, dict[tuple[int, int], arcade.Sprite]] = {}
         self.water_sprite_list = arcade.SpriteList()
         self.water_sprite_maps: dict[int, dict[tuple[int, int], arcade.Sprite]] = {}
+        self.lava_sprite_list = arcade.SpriteList()
+        self.lava_sprite_maps: dict[int, dict[tuple[int, int], arcade.Sprite]] = {}
         self._debug_logged_tiny_edge_cells: set[tuple[int, int]] = set()
         self.camera = arcade.Camera2D()
         self.ui_camera = arcade.Camera2D()
@@ -89,8 +96,10 @@ class GameWindow(arcade.Window):
         self.lighting = LightingSystem(self)
         self.light_layer = self.light_layer
         self.torch_light_color = self.lighting.torch_light_color
+        self.lava_light_color = (255, 122, 68)
         self.player_torch_light = self.lighting.player_torch_light
         self.placed_torch_lights: dict[tuple[int, int], Light] = self.lighting.placed_torch_lights
+        self.sampled_lava_lights: dict[tuple[int, int], Light] = {}
         self.sky_shader_program = self.lighting.sky_shader_program
         self.sky_quad = self.lighting.sky_quad
         self.sun_sprite = self.lighting.sun_sprite
@@ -371,7 +380,7 @@ class GameWindow(arcade.Window):
                 continue
 
     def _sync_torch_lights(self):
-        """Synchronisiert Spieler- und Welt-Fackellichter mit dem aktuellen Zustand."""
+        """Synchronisiert Spieler-/Welt-Fackeln und gesampelte Lava-Lichter mit dem aktuellen Zustand."""
         torch_daylight_scale = self._torch_daylight_multiplier(self.player.center_x, self.player.center_y)
 
         if self._is_torch_equipped():
@@ -379,7 +388,7 @@ class GameWindow(arcade.Window):
             if light_pos is None:
                 light_pos = (self.player.center_x, self.player.center_y + self.player.height * 0.10)
             self.player_torch_light.position = light_pos
-            self.player_torch_light.radius = 135.0 * torch_daylight_scale
+            self.player_torch_light.radius = 165.0 * torch_daylight_scale
             setattr(self.player_torch_light, "color", self.torch_light_color)
         else:
             self.player_torch_light.radius = 0.0
@@ -395,7 +404,7 @@ class GameWindow(arcade.Window):
             light = self.placed_torch_lights.get(tile_pos)
             light_x, light_y = self._torch_light_position(tile_pos[0], tile_pos[1])
             tile_scale = self._torch_daylight_multiplier(light_x, light_y)
-            radius = 135.0 * tile_scale
+            radius = 165.0 * tile_scale
             if light is None:
                 light = Light(light_x, light_y, radius=radius, color=self.torch_light_color, mode="soft")
                 self.light_layer.add(light)
@@ -404,6 +413,33 @@ class GameWindow(arcade.Window):
                 light.position = (light_x, light_y)
                 light.radius = radius
                 setattr(light, "color", self.torch_light_color)
+
+        lava_samples = self.lighting.collect_visible_lava_light_samples()
+        current_lava_tiles = {(sample.tile_x, sample.tile_y) for sample in lava_samples}
+        existing_lava_tiles = set(self.sampled_lava_lights.keys())
+
+        for tile_pos in existing_lava_tiles - current_lava_tiles:
+            light = self.sampled_lava_lights.pop(tile_pos)
+            self.light_layer.remove(light)
+
+        for sample in lava_samples:
+            tile_pos = (sample.tile_x, sample.tile_y)
+            light = self.sampled_lava_lights.get(tile_pos)
+            warm_strength = max(0.0, min(1.0, sample.strength))
+            color = (
+                int(220 + 35 * warm_strength),
+                int(86 + 64 * warm_strength),
+                int(44 + 22 * warm_strength),
+            )
+
+            if light is None:
+                light = Light(sample.world_x, sample.world_y, radius=sample.radius, color=color, mode="soft")
+                self.light_layer.add(light)
+                self.sampled_lava_lights[tile_pos] = light
+            else:
+                light.position = (sample.world_x, sample.world_y)
+                light.radius = sample.radius
+                setattr(light, "color", color)
 
     def _torch_daylight_multiplier(self, world_x: float, world_y: float) -> float:
         """Wrapper to the lighting system implementation."""
@@ -530,6 +566,8 @@ class GameWindow(arcade.Window):
         self.chunk_sprite_maps = {}
         self.water_sprite_list = arcade.SpriteList()
         self.water_sprite_maps = {}
+        self.lava_sprite_list = arcade.SpriteList()
+        self.lava_sprite_maps = {}
         for chunk_x in sorted(self.world.chunks):
             chunk = self.world.chunks[chunk_x]
             sprite_list, sprite_map = build_chunk_sprite_list(chunk_x, chunk, min_tile_y, max_tile_y)
@@ -546,6 +584,17 @@ class GameWindow(arcade.Window):
             for sprite in water_sprites:
                 self.water_sprite_list.append(sprite)
             self.water_sprite_maps[chunk_x] = water_map
+
+            lava_sprites, lava_map = build_chunk_lava_sprite_list(
+                chunk_x,
+                chunk,
+                min_tile_y,
+                max_tile_y,
+                include_map=True,
+            )
+            for sprite in lava_sprites:
+                self.lava_sprite_list.append(sprite)
+            self.lava_sprite_maps[chunk_x] = lava_map
         self.render_tile_range = (min_tile_y, max_tile_y)
 
     def _get_visible_tile_range(self, margin_tiles: int | None = None) -> tuple[int, int]:
@@ -585,6 +634,10 @@ class GameWindow(arcade.Window):
             if removed_water is not None:
                 for sprite in removed_water.values():
                     self.water_sprite_list.remove(sprite)
+            removed_lava = self.lava_sprite_maps.pop(chunk_x, None)
+            if removed_lava is not None:
+                for sprite in removed_lava.values():
+                    self.lava_sprite_list.remove(sprite)
 
         if not loaded_chunks:
             return
@@ -618,6 +671,22 @@ class GameWindow(arcade.Window):
             for sprite in water_sprites:
                 self.water_sprite_list.append(sprite)
             self.water_sprite_maps[chunk_x] = water_map
+
+            old_lava = self.lava_sprite_maps.pop(chunk_x, None)
+            if old_lava is not None:
+                for sprite in old_lava.values():
+                    self.lava_sprite_list.remove(sprite)
+
+            lava_sprites, lava_map = build_chunk_lava_sprite_list(
+                chunk_x,
+                chunk,
+                min_tile_y,
+                max_tile_y,
+                include_map=True,
+            )
+            for sprite in lava_sprites:
+                self.lava_sprite_list.append(sprite)
+            self.lava_sprite_maps[chunk_x] = lava_map
 
     def _apply_world_water_diffs(self, changes: list[tuple[int, int, float, float]]):
         """Aktualisiert Wasser-Sprites gezielt pro geänderter Zelle statt Voll-Rebuild."""
@@ -695,6 +764,64 @@ class GameWindow(arcade.Window):
 
             self.water_sprite_list.append(sprite)
             chunk_water_map[key] = sprite
+
+    def _apply_world_lava_diffs(self, changes: list[tuple[int, int, float, float]]):
+        """Aktualisiert Lava-Sprites gezielt pro geänderter Zelle statt Voll-Rebuild."""
+        if not changes:
+            return
+
+        if self.render_tile_range is None:
+            min_tile_y, max_tile_y = self._get_target_render_tile_range()
+            self.render_tile_range = (min_tile_y, max_tile_y)
+        else:
+            min_tile_y, max_tile_y = self.render_tile_range
+
+        for tile_x, tile_y, _old_value, new_value in changes:
+            chunk_x, local_x = world_to_chunk_and_local(tile_x)
+            chunk = self.world.chunks.get(chunk_x)
+            if chunk is None:
+                continue
+
+            chunk_lava_map = self.lava_sprite_maps.setdefault(chunk_x, {})
+            key = (local_x, tile_y)
+            existing_sprite = chunk_lava_map.get(key)
+
+            in_visible_band = min_tile_y <= tile_y <= max_tile_y
+            block_id = chunk.get_block(local_x, tile_y)
+            block_open_for_lava = block_id == AIR or not is_block_solid(block_id)
+            normalized = max(0.0, min(1.0, float(new_value)))
+            target_height = get_lava_render_height(normalized)
+            should_render = in_visible_band and block_open_for_lava and target_height > 0.0
+
+            if not should_render:
+                if existing_sprite is not None:
+                    self.lava_sprite_list.remove(existing_sprite)
+                    chunk_lava_map.pop(key, None)
+                continue
+
+            target_center_x = (tile_x + 0.5) * TILE_SIZE
+            target_center_y = (tile_y + (target_height / TILE_SIZE) / 2.0) * TILE_SIZE
+            target_alpha = 200
+
+            if existing_sprite is not None:
+                existing_sprite.width = TILE_SIZE
+                existing_sprite.height = target_height
+                existing_sprite.center_x = target_center_x
+                existing_sprite.center_y = target_center_y
+                existing_sprite.alpha = target_alpha
+                existing_sprite.color = (255, 255, 255)
+                continue
+
+            sprite = arcade.Sprite(LAVA_TEXTURE)
+            sprite.center_x = target_center_x
+            sprite.center_y = target_center_y
+            sprite.width = TILE_SIZE
+            sprite.height = target_height
+            sprite.alpha = target_alpha
+            sprite.color = (255, 255, 255)
+
+            self.lava_sprite_list.append(sprite)
+            chunk_lava_map[key] = sprite
 
     def _apply_world_block_diffs(self, changes: list[tuple[int, int, int, int]]):
         """Aktualisiert Sprites einzelner geänderter Blöcke ohne Chunk-Rebuild."""
@@ -784,9 +911,11 @@ class GameWindow(arcade.Window):
         self.player_torch_light = Light(0.0, 0.0, radius=0.0, color=(255, 255, 230), mode="soft")
         self.light_layer.add(self.player_torch_light)
         self.placed_torch_lights = {}
+        self.sampled_lava_lights = {}
         self.chunk_sprite_lists = {}
         self.chunk_sprite_maps = {}
         self.water_sprite_maps = {}
+        self.lava_sprite_maps = {}
         self._debug_logged_tiny_edge_cells = set()
         self.render_tile_range = None
         self.camera.position = self._clamped_camera_position()
@@ -910,6 +1039,10 @@ class GameWindow(arcade.Window):
         water_changes = self.world.consume_changed_water()
         if water_changes and not did_full_rebuild:
             self._apply_world_water_diffs(water_changes)
+
+        lava_changes = self.world.consume_changed_lava()
+        if lava_changes and not did_full_rebuild:
+            self._apply_world_lava_diffs(lava_changes)
 
         if self.player.world_dirty:
             self.player.world_dirty = False
@@ -1085,6 +1218,7 @@ class GameWindow(arcade.Window):
             self.player.draw_held_item(layer="front")
             self.mining_sprite_list.draw()
             self.water_sprite_list.draw()
+            self.lava_sprite_list.draw()
             self._draw_underground_darkness_overlay()
 
         self.light_layer.draw(ambient_color=self._ambient_color())

@@ -22,6 +22,7 @@ DIAMOND_ORE = 11
 OAK_PLANKS = 12
 COBBLESTONE = 13
 SAND = 14
+OBSIDIAN = 15
 
 from items import CHARCOAL, DIAMOND, GOLD_INGOT, IRON_INGOT
 
@@ -46,6 +47,7 @@ BLOCKS = {
     DIAMOND_ORE: {"name": "Diamond Ore", "texture": "diamond_ore.png", "solid": True, "hardness": 3.0, "drop_id": DIAMOND, "falling": False},
     OAK_PLANKS: {"name": "Oak Planks", "texture": "planks_oak.png", "solid": True, "falling": False},
     COBBLESTONE: {"name": "Cobblestone", "texture": "cobblestone.png", "solid": True, "hardness": 2.0, "falling": False},
+    OBSIDIAN: {"name": "Obsidian", "texture": "obsidian.png", "solid": True, "hardness": 10}
 }
 
 

@@ -11,6 +11,8 @@ import math
 from dataclasses import dataclass, field
 
 from blocks import AIR, SAND, is_block_falling, is_block_solid, is_block_water_passable
+from lava import LAVA_DAMAGE, LAVA_DAMAGE_INTERVAL, LAVA_TICK_INTERVAL, LavaSystem, PLAYER_LAVA_THRESHOLD
+from liquid_interactions import LiquidInteractionSystem
 from settings import WORLD_SEED
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
 from water import WATER_TICK_INTERVAL, WaterSystem
@@ -34,6 +36,7 @@ class Chunk:
     height: int = WORLD_HEIGHT
     blocks: list[list[int]] = field(default_factory=list)
     water: dict[tuple[int, int], float] = field(default_factory=dict)
+    lava: dict[tuple[int, int], float] = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.blocks:
@@ -84,6 +87,40 @@ class Chunk:
         new_amount = max(0.0, current - amount)
         return self.set_water(local_x, y, new_amount)
 
+    def get_lava(self, local_x: int, y: int) -> float:
+        """Liefert die Lavafüllung an einer lokalen Chunk-Position oder 0.0."""
+        if 0 <= local_x < self.width and 0 <= y < self.height:
+            return float(self.lava.get((local_x, y), 0.0))
+        return 0.0
+
+    def set_lava(self, local_x: int, y: int, amount: float) -> float:
+        """Setzt den Lavawert einer lokalen Chunk-Position und gibt ihn zurück."""
+        if not (0 <= local_x < self.width and 0 <= y < self.height):
+            return 0.0
+
+        value = max(0.0, min(1.0, float(amount)))
+        if value <= 0.0:
+            self.lava.pop((local_x, y), None)
+            return 0.0
+
+        self.lava[(local_x, y)] = value
+        return value
+
+    def add_lava(self, local_x: int, y: int, amount: float) -> float:
+        """Erhöht die Lavafüllung auf einer lokalen Chunk-Position."""
+        if not (0 <= local_x < self.width and 0 <= y < self.height):
+            return 0.0
+        current = self.get_lava(local_x, y)
+        return self.set_lava(local_x, y, current + amount)
+
+    def remove_lava(self, local_x: int, y: int, amount: float) -> float:
+        """Reduziert die Lavafüllung auf einer lokalen Chunk-Position."""
+        if not (0 <= local_x < self.width and 0 <= y < self.height):
+            return 0.0
+        current = self.get_lava(local_x, y)
+        new_amount = max(0.0, current - amount)
+        return self.set_lava(local_x, y, new_amount)
+
 
 class World:
     """Objekt, das den aktuellen Zustand der Welt verwaltet."""
@@ -94,14 +131,21 @@ class World:
         self.placed_items: dict[tuple[int, int], int] = {}
         self.saved_chunk_blocks: dict[int, list[list[int]]] = {}
         self.saved_chunk_water: dict[int, dict[tuple[int, int], float]] = {}
+        self.saved_chunk_lava: dict[int, dict[tuple[int, int], float]] = {}
         self.pending_generated_blocks: dict[int, dict[tuple[int, int], int]] = {}
         self.changed_blocks: list[tuple[int, int, int, int]] = []
         self.changed_water: list[tuple[int, int, float, float]] = []
+        self.changed_lava: list[tuple[int, int, float, float]] = []
+        self.detected_liquid_contacts: list[tuple[int, int]] = []
         self.changed_placed_items: list[tuple[int, int, int | None, int | None]] = []
         self.load_radius = load_radius
         self.unload_radius = unload_radius
         self.water_time_accumulator = 0.0
+        self.lava_time_accumulator = 0.0
         self.water_system = WaterSystem()
+        self.lava_system = LavaSystem()
+        self.liquid_interactions = LiquidInteractionSystem()
+        self.player_lava_damage_timer = 0.0
 
         if generator is None:
             from world_generation import WorldGenerator
@@ -135,6 +179,17 @@ class World:
     def save_chunk_water(self, chunk_x: int, water: dict[tuple[int, int], float]) -> None:
         """Speichert einen Snapshot der Chunk-Wasserwerte persistent im Speicher."""
         self.saved_chunk_water[chunk_x] = dict(water)
+
+    def get_saved_chunk_lava(self, chunk_x: int) -> dict[tuple[int, int], float] | None:
+        """Liefert gespeicherte Lavawerte für einen Chunk, falls vorhanden."""
+        lava = self.saved_chunk_lava.get(chunk_x)
+        if lava is None:
+            return None
+        return dict(lava)
+
+    def save_chunk_lava(self, chunk_x: int, lava: dict[tuple[int, int], float]) -> None:
+        """Speichert einen Snapshot der Chunk-Lavawerte persistent im Speicher."""
+        self.saved_chunk_lava[chunk_x] = dict(lava)
 
     def queue_generated_block(self, world_x: int, y: int, block_id: int) -> None:
         """Merkt Welt-Generierungsblöcke ohne Chunk-Generierung im aktuellen Frame."""
@@ -259,6 +314,51 @@ class World:
             or tile_bottom >= player_top
         )
 
+    def _player_overlaps_meaningful_lava(self, player, threshold: float = PLAYER_LAVA_THRESHOLD) -> bool:
+        """True, wenn das Spieler-AABB sinnvolle Lavafüllung überlappt."""
+        left = player.center_x - player.collision_width / 2
+        right = player.center_x + player.collision_width / 2
+        bottom = player.center_y - player.collision_height / 2
+        top = player.center_y + player.collision_height / 2
+
+        min_tile_x = int(math.floor(left / TILE_SIZE))
+        max_tile_x = int(math.floor((right - 1e-6) / TILE_SIZE))
+        min_tile_y = int(math.floor(bottom / TILE_SIZE))
+        max_tile_y = int(math.floor((top - 1e-6) / TILE_SIZE))
+
+        for tile_x in range(min_tile_x, max_tile_x + 1):
+            for tile_y in range(min_tile_y, max_tile_y + 1):
+                amount = self.get_lava(tile_x, tile_y)
+                if amount < threshold:
+                    continue
+
+                tile_left = tile_x * TILE_SIZE
+                tile_right = tile_left + TILE_SIZE
+                tile_bottom = tile_y * TILE_SIZE
+                tile_lava_top = tile_bottom + TILE_SIZE * max(0.0, min(1.0, amount))
+
+                overlap_w = max(0.0, min(right, tile_right) - max(left, tile_left))
+                overlap_h = max(0.0, min(top, tile_lava_top) - max(bottom, tile_bottom))
+                if overlap_w > 0.0 and overlap_h > 0.0:
+                    return True
+
+        return False
+
+    def _update_player_lava_damage(self, player, delta_time: float) -> None:
+        """Wendet periodischen Lavaschaden bei Kontakt mit Cooldown an."""
+        if player is None:
+            self.player_lava_damage_timer = 0.0
+            return
+
+        if not self._player_overlaps_meaningful_lava(player):
+            self.player_lava_damage_timer = 0.0
+            return
+
+        self.player_lava_damage_timer += max(0.0, float(delta_time))
+        while self.player_lava_damage_timer >= LAVA_DAMAGE_INTERVAL:
+            player.take_damage(LAVA_DAMAGE)
+            self.player_lava_damage_timer -= LAVA_DAMAGE_INTERVAL
+
     def update_falling_blocks(
         self,
         delta_time: float,
@@ -316,6 +416,23 @@ class World:
         while self.water_time_accumulator >= WATER_TICK_INTERVAL:
             self.water_system.update(self, WATER_TICK_INTERVAL)
             self.water_time_accumulator -= WATER_TICK_INTERVAL
+
+        self.lava_time_accumulator += delta_time
+        while self.lava_time_accumulator >= LAVA_TICK_INTERVAL:
+            self.lava_system.update(self, LAVA_TICK_INTERVAL)
+            self.lava_time_accumulator -= LAVA_TICK_INTERVAL
+
+        contacts = self.liquid_interactions.detect_contacts(
+            self,
+            self.changed_water,
+            self.changed_lava,
+            self.changed_blocks,
+        )
+        if contacts:
+            self.detected_liquid_contacts.extend(contacts)
+            self.liquid_interactions.resolve_contacts(self, contacts)
+
+        self._update_player_lava_damage(player, delta_time)
 
     def get_loaded_chunk_count(self) -> int:
         """Gibt die Anzahl der aktuell geladenen Chunks zurück."""
@@ -375,6 +492,53 @@ class World:
             self.water_system.activate_neighborhood(world_x, y)
         return value
 
+    def get_lava(self, world_x: int, y: int) -> float:
+        """Gibt die Lavafüllung an einer Weltposition zurück; 0.0 wenn keine Lava vorhanden ist."""
+        if y < 0 or y >= WORLD_HEIGHT:
+            return 0.0
+
+        chunk_x, local_x = world_to_chunk_and_local(world_x)
+        chunk = self.chunks.get(chunk_x)
+        if chunk is not None:
+            return chunk.get_lava(local_x, y)
+
+        saved_lava = self.saved_chunk_lava.get(chunk_x)
+        if saved_lava is not None:
+            return float(saved_lava.get((local_x, y), 0.0))
+        return 0.0
+
+    def set_lava(self, world_x: int, y: int, amount: float) -> float:
+        """Setzt die Lavafüllung an einer Weltposition und gibt den neuen Wert zurück."""
+        if y < 0 or y >= WORLD_HEIGHT:
+            return 0.0
+
+        old_value = self.get_lava(world_x, y)
+        chunk_x, local_x = world_to_chunk_and_local(world_x)
+        chunk = self.chunks.get(chunk_x)
+        if chunk is None:
+            chunk = self.generate_chunk(chunk_x)
+        value = chunk.set_lava(local_x, y, amount)
+        if value <= 0.0:
+            chunk.lava.pop((local_x, y), None)
+        delta = abs(old_value - value)
+        if delta > 1e-12:
+            self.changed_lava.append((world_x, y, old_value, value))
+
+        meaningful_change = delta >= self.lava_system.min_flow
+        if meaningful_change:
+            self.lava_system.activate_neighborhood(world_x, y)
+        return value
+
+    def add_lava(self, world_x: int, y: int, amount: float) -> float:
+        """Erhöht die Lavafüllung an einer Weltposition um den Betrag."""
+        current = self.get_lava(world_x, y)
+        return self.set_lava(world_x, y, current + amount)
+
+    def remove_lava(self, world_x: int, y: int, amount: float) -> float:
+        """Reduziert die Lavafüllung an einer Weltposition um den Betrag."""
+        current = self.get_lava(world_x, y)
+        return self.set_lava(world_x, y, current - amount)
+
     def add_water(self, world_x: int, y: int, amount: float) -> float:
         """Erhöht die Wasserfüllung an einer Weltposition um den Betrag."""
         current = self.get_water(world_x, y)
@@ -414,11 +578,15 @@ class World:
         # in derselben Zelle entfernt (kein komplexes Verdrängen).
         if block_id != AIR and is_block_solid(block_id) and self.get_water(world_x, y) > 0.0:
             self.set_water(world_x, y, 0.0)
+        if block_id != AIR and is_block_solid(block_id) and self.get_lava(world_x, y) > 0.0:
+            self.set_lava(world_x, y, 0.0)
 
         chunk.set_block(local_x, y, block_id)
         self.changed_blocks.append((world_x, y, old_block_id, block_id))
         self.water_system.activate_neighborhood(world_x, y)
         self.water_system.activate_water_column_above(self, world_x, y + 1)
+        self.lava_system.activate_neighborhood(world_x, y)
+        self.lava_system.activate_lava_column_above(self, world_x, y + 1)
 
     def consume_changed_blocks(self) -> list[tuple[int, int, int, int]]:
         """Liefert und leert die Liste geänderter Blöcke als (x, y, alt, neu)."""
@@ -435,6 +603,22 @@ class World:
         changes = self.changed_water
         self.changed_water = []
         return changes
+
+    def consume_changed_lava(self) -> list[tuple[int, int, float, float]]:
+        """Liefert und leert die Liste geänderter Lavawerte als (x, y, alt, neu)."""
+        if not self.changed_lava:
+            return []
+        changes = self.changed_lava
+        self.changed_lava = []
+        return changes
+
+    def consume_detected_liquid_contacts(self) -> list[tuple[int, int]]:
+        """Liefert und leert erkannte Wasser/Lava-Kontaktzellen."""
+        if not self.detected_liquid_contacts:
+            return []
+        contacts = self.detected_liquid_contacts
+        self.detected_liquid_contacts = []
+        return contacts
 
     def break_block(self, world_x: int, y: int) -> int:
         """Entfernt einen Block und liefert den alten Blocktyp zurück."""

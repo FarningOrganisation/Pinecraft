@@ -11,13 +11,14 @@ from arcade.gl import geometry as gl_geometry
 
 from blocks import AIR, get_block_light_opacity, is_block_skylight_surface
 from items import TORCH
+from lava_lighting import MAX_LAVA_LIGHT_SAMPLES, collect_lava_light_samples
 from paths import textures_dir
-from settings import TILE_SIZE, WORLD_HEIGHT
+from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
 from world_generation import SEA_LEVEL
 
 CELESTIAL_HIDE_BELOW_SEA_TILES = 10
-MAX_SHADER_TORCH_LIGHTS = 32
-SHADER_TORCH_RADIUS = 210.0
+MAX_SHADER_LOCAL_LIGHTS = 32
+SHADER_TORCH_RADIUS = 250.0
 
 
 class LightingSystem:
@@ -36,6 +37,7 @@ class LightingSystem:
         self.profile_moon_light_world_pos: tuple[float, float] = (0.0, 0.0)
         self.profile_moon_light_radius = 0.0
         self.profile_moon_light_strength = 0.0
+        self.profile_visible_lava_lights = 0
 
         self.window.light_layer.set_background_color((0, 0, 0, 0))
         self.player_torch_light = Light(0.0, 0.0, radius=0.0, color=self.torch_light_color, mode="soft")
@@ -148,6 +150,7 @@ class LightingSystem:
                 uniform int u_light_count;
                 uniform vec2 u_light_positions[32];
                 uniform float u_light_radii[32];
+                uniform float u_light_strengths[32];
                 uniform int u_moon_light_enabled;
                 uniform vec2 u_moon_light_position;
                 uniform float u_moon_light_radius;
@@ -192,7 +195,8 @@ class LightingSystem:
                         float radius = max(1.0, u_light_radii[i]);
                         float dist = distance(world_pos, u_light_positions[i]);
                         float falloff = 1.0 - smoothstep(radius * 0.10, radius, dist);
-                        torch_light += falloff * 0.92 * local_light_receiver;
+                        float light_strength = clamp(u_light_strengths[i], 0.0, 1.5);
+                        torch_light += falloff * 0.92 * light_strength * local_light_receiver;
                     }
 
                     float moon_light = 0.0;
@@ -297,6 +301,14 @@ class LightingSystem:
                 return y
         return -1
 
+    @staticmethod
+    def _is_tile_column_loaded(world, tile_x: int) -> bool:
+        """True, wenn die Spalte in einem aktuell geladenen Chunk liegt."""
+        chunk_x, local_x = divmod(tile_x, CHUNK_WIDTH)
+        if local_x < 0:
+            chunk_x -= 1
+        return chunk_x in world.chunks
+
     def sky_background_blend(self) -> float:
         """0 = normale Sky-Farbe, 1 = tiefe Höhle; Abstand zur nächsten Open-Air-Säule bestimmt den Übergang."""
         player_tile_x = int(self.window.player.center_x // TILE_SIZE)
@@ -306,12 +318,16 @@ class LightingSystem:
 
         top_occluder_by_x: dict[int, int] = {}
         for tile_x in range(player_tile_x - search_radius, player_tile_x + search_radius + 1):
+            if not self._is_tile_column_loaded(self.window.world, tile_x):
+                continue
             top_occluder_by_x[tile_x] = self._column_top_occluder_y(tile_x)
 
         for ox in range(-search_radius, search_radius + 1):
             for oy in range(-search_radius, search_radius + 1):
                 tile_x = player_tile_x + ox
                 tile_y = player_tile_y + oy
+                if not self._is_tile_column_loaded(self.window.world, tile_x):
+                    continue
                 if tile_y < 0 or tile_y >= WORLD_HEIGHT:
                     continue
                 if self.window.world.get_block(tile_x, tile_y, generate_if_missing=False) != AIR:
@@ -656,13 +672,15 @@ class LightingSystem:
                 # Manche Treiber optimieren ungenutzte Uniforms komplett heraus.
                 return False
 
-        torch_lights = self._collect_shader_torch_lights(MAX_SHADER_TORCH_LIGHTS)
-        light_positions_flat: list[float] = [0.0] * (MAX_SHADER_TORCH_LIGHTS * 2)
-        light_radii: list[float] = [0.0] * MAX_SHADER_TORCH_LIGHTS
-        for i, (light_x, light_y, radius) in enumerate(torch_lights):
+        local_lights = self._collect_shader_local_lights(MAX_SHADER_LOCAL_LIGHTS)
+        light_positions_flat: list[float] = [0.0] * (MAX_SHADER_LOCAL_LIGHTS * 2)
+        light_radii: list[float] = [0.0] * MAX_SHADER_LOCAL_LIGHTS
+        light_strengths: list[float] = [0.0] * MAX_SHADER_LOCAL_LIGHTS
+        for i, (light_x, light_y, radius, strength) in enumerate(local_lights):
             light_positions_flat[i * 2] = light_x
             light_positions_flat[i * 2 + 1] = light_y
             light_radii[i] = radius
+            light_strengths[i] = strength
 
         set_uniform_safe("u_surface_min_x", float(self._surface_min_tile_x))
         set_uniform_safe("u_surface_span", surface_span)
@@ -672,7 +690,7 @@ class LightingSystem:
         set_uniform_safe("u_screen_height", float(self.window.height))
         set_uniform_safe("u_tile_size", float(TILE_SIZE))
         set_uniform_safe("u_day_factor", float(self.day_factor()))
-        set_uniform_safe("u_light_count", int(len(torch_lights)))
+        set_uniform_safe("u_light_count", int(len(local_lights)))
 
         moon_light = self._moon_world_light()
         if moon_light is None:
@@ -694,13 +712,15 @@ class LightingSystem:
 
         array_positions_set = set_uniform_safe("u_light_positions", tuple(light_positions_flat))
         array_radii_set = set_uniform_safe("u_light_radii", tuple(light_radii))
-        if not (array_positions_set and array_radii_set):
-            for i in range(MAX_SHADER_TORCH_LIGHTS):
+        array_strengths_set = set_uniform_safe("u_light_strengths", tuple(light_strengths))
+        if not (array_positions_set and array_radii_set and array_strengths_set):
+            for i in range(MAX_SHADER_LOCAL_LIGHTS):
                 set_uniform_safe(
                     f"u_light_positions[{i}]",
                     (light_positions_flat[i * 2], light_positions_flat[i * 2 + 1]),
                 )
                 set_uniform_safe(f"u_light_radii[{i}]", light_radii[i])
+                set_uniform_safe(f"u_light_strengths[{i}]", light_strengths[i])
 
         prev_blend_func = self.window.ctx.blend_func
         t0 = time.perf_counter()
@@ -778,9 +798,26 @@ class LightingSystem:
         moon_strength = 0.34 + 0.36 * night_strength
         return float(moon_world_x), float(moon_world_y), moon_radius, moon_strength
 
-    def _collect_shader_torch_lights(self, max_lights: int) -> list[tuple[float, float, float]]:
-        """Sammelt nahe, sichtbare Torch-Lichter fuer den GPU-Shader in Weltkoordinaten."""
-        lights: list[tuple[float, float, float, float]] = []
+    def collect_visible_lava_light_samples(self):
+        """Sammelt sichtbare Lava-Lichtsamples im Kamerabereich."""
+        min_tile_x, max_tile_x = self.window._get_visible_tile_x_range(margin_tiles=10)
+        min_tile_y, max_tile_y = self.window._get_visible_tile_range(margin_tiles=8)
+        camera_x = float(self.window.camera.position[0])
+        camera_y = float(self.window.camera.position[1])
+        return collect_lava_light_samples(
+            self.window.world,
+            min_tile_x,
+            max_tile_x,
+            min_tile_y,
+            max_tile_y,
+            camera_x,
+            camera_y,
+            max_samples=MAX_LAVA_LIGHT_SAMPLES,
+        )
+
+    def _collect_shader_local_lights(self, max_lights: int) -> list[tuple[float, float, float, float]]:
+        """Sammelt nahe, sichtbare lokale Lichter (Torch + Lava) fuer den GPU-Shader."""
+        lights: list[tuple[float, float, float, float, float]] = []
 
         min_tile_x, max_tile_x = self.window._get_visible_tile_x_range(margin_tiles=10)
         min_tile_y, max_tile_y = self.window._get_visible_tile_range(margin_tiles=8)
@@ -802,7 +839,7 @@ class LightingSystem:
                 continue
             radius = SHADER_TORCH_RADIUS * torch_scale
             dist_sq = (light_x - player_x) ** 2 + (light_y - player_y) ** 2
-            lights.append((dist_sq, light_x, light_y, radius))
+            lights.append((dist_sq, light_x, light_y, radius, 1.0))
 
         if self.window._is_torch_equipped():
             player_light_pos = self.window.player.get_equipped_light_source_position()
@@ -813,10 +850,16 @@ class LightingSystem:
                 if torch_scale > 0.01:
                     radius = SHADER_TORCH_RADIUS * torch_scale
                     dist_sq = (light_x - player_x) ** 2 + (light_y - player_y) ** 2
-                    lights.append((dist_sq, light_x, light_y, radius))
+                    lights.append((dist_sq, light_x, light_y, radius, 1.0))
+
+        lava_samples = self.collect_visible_lava_light_samples()
+        self.profile_visible_lava_lights = len(lava_samples)
+        for sample in lava_samples:
+            dist_sq = (sample.world_x - player_x) ** 2 + (sample.world_y - player_y) ** 2
+            lights.append((dist_sq, sample.world_x, sample.world_y, sample.radius, sample.strength))
 
         lights.sort(key=lambda entry: entry[0])
-        return [(x, y, r) for _dist, x, y, r in lights[:max_lights]]
+        return [(x, y, r, s) for _dist, x, y, r, s in lights[:max_lights]]
 
     def draw_underground_darkness_overlay(self):
         """Standardpfad: Shader-Overlay; CPU-Pfad bleibt optional per Debug-Flag."""
@@ -838,7 +881,8 @@ class LightingSystem:
             f"Light[{mode}] cpu={self.profile_cpu_overlay_ms:5.2f}ms "
             f"surf={self.profile_surface_map_update_ms:5.2f}ms "
             f"shader={self.profile_shader_overlay_ms:5.2f}ms "
-            f"moon={moon_state} r={self.profile_moon_light_radius:4.0f} s={self.profile_moon_light_strength:0.2f}"
+            f"moon={moon_state} r={self.profile_moon_light_radius:4.0f} s={self.profile_moon_light_strength:0.2f} "
+            f"lavaLights={self.profile_visible_lava_lights}"
         )
 
     @staticmethod
@@ -924,7 +968,7 @@ class LightingSystem:
         camera_x, camera_y = self.window.camera.position
         half_w = self.window.width * 0.5
         half_h = self.window.height * 0.5
-        torch_lights = self._collect_shader_torch_lights(MAX_SHADER_TORCH_LIGHTS)
+        local_lights = self._collect_shader_local_lights(MAX_SHADER_LOCAL_LIGHTS)
         moon_light = self._moon_world_light()
         ambient_color = self.ambient_color()
         ambient_luma = max(0.05, (ambient_color[0] + ambient_color[1] + ambient_color[2]) / (3.0 * 255.0))
@@ -945,11 +989,11 @@ class LightingSystem:
             world_y = camera_y + (y - half_h)
             local_dim = 0.0
 
-            for light_x, light_y, radius in torch_lights:
+            for light_x, light_y, radius, strength in local_lights:
                 r = max(1.0, radius)
                 dist = math.hypot(world_x - light_x, world_y - light_y)
                 falloff = 1.0 - smoothstep_py(r * 0.10, r, dist)
-                local_dim += falloff * 0.92
+                local_dim += falloff * 0.92 * max(0.0, min(1.2, strength))
 
             if moon_light is not None:
                 moon_x, moon_y, moon_radius, moon_strength = moon_light
