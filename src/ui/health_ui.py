@@ -44,7 +44,7 @@ class HealthUI(arcade.gui.UIWidget):
                 self.heart_size,
                 self.heart_size,
             )
-            arcade.draw_texture_rect(texture, rect, alpha=255)
+            arcade.draw_texture_rect(texture, rect, alpha=255, pixelated=True)
 
     def do_render(self, surface):
         self.draw()

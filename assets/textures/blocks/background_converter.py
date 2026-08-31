@@ -22,4 +22,4 @@ def make_background_texture(image_path, output_path, brightness_factor=0.5):
 for file in os.scandir(directory):
     if file.name.endswith(".png"):
         print(file.path)
-        make_background_texture(file.path, Path(directory) /  Path(f"background/{file.name}"), 0.5)
+        make_background_texture(file.path, Path(directory) /  Path(f"background/{file.name}"), 0.7)

@@ -86,9 +86,9 @@ class GameWindow(arcade.Window):
         self.ui_manager = arcade.gui.UIManager()
         self.ui_manager.enable()
         self.inventory_anchor = arcade.gui.UIAnchorLayout(size_hint=(1.0, 1.0))
+        self.ui_manager.add(self.bubble_ui)
         self.ui_manager.add(self.hotbar)
         self.ui_manager.add(self.health_ui)
-        self.ui_manager.add(self.bubble_ui)
         self.ui_manager.add(self.inventory_anchor)
         self.inventory_anchor.add(self.inventory_ui, anchor_x="center", anchor_y="center")
         self.chunk_sprite_lists: dict[int, arcade.SpriteList] = {}

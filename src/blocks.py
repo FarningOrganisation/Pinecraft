@@ -25,6 +25,9 @@ SAND = 14
 OBSIDIAN = 15
 COBBLESTONE_BG = 16
 
+BACKGROUND_BLOCK_ID_OFFSET = 200
+SOLID_BLOCK_ID_OFFSET = 400
+
 from items import CHARCOAL, DIAMOND, GOLD_INGOT, IRON_INGOT
 
 BLOCKS = {
@@ -51,6 +54,108 @@ BLOCKS = {
     OBSIDIAN: {"name": "Obsidian", "texture": "obsidian.png", "solid": True, "hardness": 10},
     COBBLESTONE_BG: {"name": "Cobblestone Background", "texture": "background/cobblestone.png", "solid": False}
 }
+
+EXCLUDED_BACKGROUND_CONVERSION_BLOCKS = {AIR, BEDROCK}
+
+# Direkte Spezialzuordnungen behalten bestehende IDs stabil.
+_EXPLICIT_NORMAL_TO_BACKGROUND = {
+    COBBLESTONE: COBBLESTONE_BG,
+}
+
+NORMAL_TO_BACKGROUND_BLOCK: dict[int, int] = {}
+BACKGROUND_TO_NORMAL_BLOCK: dict[int, int] = {}
+
+
+def _unique_block_id(preferred_id: int) -> int:
+    """Findet eine freie Block-ID auf Basis eines Offset-Bereichs."""
+    candidate = preferred_id
+    while candidate in BLOCKS:
+        candidate += 1
+    return candidate
+
+
+def _build_background_conversion_tables() -> None:
+    """Erzeugt 1:1-Konvertierung für normale und Hintergrundblöcke."""
+    block_texture_dir = textures_dir("blocks")
+
+    for normal_id, background_id in _EXPLICIT_NORMAL_TO_BACKGROUND.items():
+        if normal_id in BLOCKS and background_id in BLOCKS:
+            NORMAL_TO_BACKGROUND_BLOCK[normal_id] = background_id
+            BACKGROUND_TO_NORMAL_BLOCK[background_id] = normal_id
+
+    # list(...) damit neu angelegte Varianten den Loop nicht beeinflussen.
+    for block_id, info in list(BLOCKS.items()):
+        if block_id == AIR:
+            continue
+
+        if block_id in NORMAL_TO_BACKGROUND_BLOCK or block_id in BACKGROUND_TO_NORMAL_BLOCK:
+            continue
+
+        name = str(info.get("name", f"Block {block_id}"))
+        texture = str(info.get("texture", ""))
+        solid = bool(info.get("solid", True))
+
+        if solid:
+            if block_id in EXCLUDED_BACKGROUND_CONVERSION_BLOCKS:
+                continue
+
+            bg_texture = texture if texture.startswith("background/") else f"background/{texture}"
+            if not (block_texture_dir / bg_texture).exists():
+                continue
+
+            bg_id = _unique_block_id(BACKGROUND_BLOCK_ID_OFFSET + block_id)
+            bg_info = dict(info)
+            bg_info["name"] = f"{name} Background"
+            bg_info["texture"] = bg_texture
+            bg_info["solid"] = False
+            bg_info["falling"] = False
+            BLOCKS[bg_id] = bg_info
+
+            NORMAL_TO_BACKGROUND_BLOCK[block_id] = bg_id
+            BACKGROUND_TO_NORMAL_BLOCK[bg_id] = block_id
+            continue
+
+        # Nicht-solide Originale (z. B. Oak/Leaves) gelten als "Hintergrund".
+        # Sie nutzen daher die Hintergrundtextur; die erzeugte solide Variante
+        # bleibt auf der normalen (helleren) Textur.
+        normal_texture = texture.removeprefix("background/")
+        background_texture = f"background/{normal_texture}"
+        if (block_texture_dir / background_texture).exists():
+            info["texture"] = background_texture
+
+        solid_id = _unique_block_id(SOLID_BLOCK_ID_OFFSET + block_id)
+        solid_info = dict(info)
+        solid_info["name"] = f"{name} Solid"
+        solid_info["texture"] = normal_texture
+        solid_info["solid"] = True
+        solid_info["falling"] = False
+        BLOCKS[solid_id] = solid_info
+
+        BACKGROUND_TO_NORMAL_BLOCK[block_id] = solid_id
+        NORMAL_TO_BACKGROUND_BLOCK[solid_id] = block_id
+
+
+def get_background_block_id(block_id: int) -> int | None:
+    """Liefert die Hintergrundvariante eines normalen Blocks."""
+    return NORMAL_TO_BACKGROUND_BLOCK.get(block_id)
+
+
+def get_foreground_block_id(block_id: int) -> int | None:
+    """Liefert die normale/solide Variante eines Hintergrundblocks."""
+    return BACKGROUND_TO_NORMAL_BLOCK.get(block_id)
+
+
+def get_convertible_partner_block_id(block_id: int) -> int | None:
+    """Liefert das jeweilige Gegenstück für die 1:1-Konvertierung."""
+    partner = NORMAL_TO_BACKGROUND_BLOCK.get(block_id)
+    if partner is not None:
+        return partner
+    return BACKGROUND_TO_NORMAL_BLOCK.get(block_id)
+
+
+def is_background_block(block_id: int) -> bool:
+    """True, wenn die ID als Hintergrundvariante behandelt wird."""
+    return block_id in BACKGROUND_TO_NORMAL_BLOCK
 
 
 def get_block_drop_id(block_id: int) -> int | None:
@@ -132,6 +237,7 @@ def is_block_skylight_surface(block_id: int) -> bool:
     return bool(block_definition.get("skylight_surface", True))
 
 TEXTURE_DIR = textures_dir("blocks")
+_build_background_conversion_tables()
 BLOCK_TEXTURES = {
     block_id: resource_manager.load_texture_in_textures(Path("blocks") / info["texture"])
     for block_id, info in BLOCKS.items()

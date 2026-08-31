@@ -3,7 +3,7 @@
 import arcade
 import arcade.gui
 
-from blocks import AIR
+from blocks import AIR, get_convertible_partner_block_id
 from crafting import find_matching_recipe
 from crafting_recipes import CRAFTING_RECIPES
 from inventory import InventorySlot
@@ -166,6 +166,74 @@ class SlotUIWidget(arcade.gui.UIWidget):
             texture = self.inventory_ui.player.inventory.get_texture(result_item)
             count = output_count if output_count > 1 else 0
             self._draw_texture_and_count(texture, count)
+            return
+
+        if self.slot_kind == "conversion_input":
+            fill_color = (40, 40, 45, 200)
+            border_color = (180, 180, 180, 180)
+            if self.is_hovered:
+                fill_color = (56, 56, 64, 220)
+                border_color = (225, 225, 225, 220)
+            if self.is_pressed:
+                fill_color = (32, 32, 38, 235)
+                border_color = (255, 255, 255, 255)
+
+            local_rect = arcade.rect.XYWH(self.width / 2, self.height / 2, self.width, self.height)
+            arcade.draw_rect_filled(local_rect, fill_color)
+            arcade.draw_rect_outline(local_rect, border_color, 2)
+
+            slot = self.inventory_ui.conversion_input_slot
+            if slot.item is None:
+                return
+
+            texture = self.inventory_ui.player.inventory.get_texture(slot.item)
+            self._draw_texture_and_count(texture, slot.count)
+            return
+
+        if self.slot_kind == "conversion_output":
+            output_item, output_count = self.inventory_ui._conversion_result_info()
+            fill_color = (40, 40, 45, 200)
+            border_color = arcade.color.WHITE if output_item is not None else (180, 180, 180, 180)
+            if self.is_hovered:
+                fill_color = (56, 56, 64, 220)
+                if output_item is not None:
+                    border_color = (255, 255, 255, 255)
+            if self.is_pressed:
+                fill_color = (32, 32, 38, 235)
+                if output_item is not None:
+                    border_color = (255, 255, 255, 255)
+
+            local_rect = arcade.rect.XYWH(self.width / 2, self.height / 2, self.width, self.height)
+            arcade.draw_rect_filled(local_rect, fill_color)
+            arcade.draw_rect_outline(local_rect, border_color, 2)
+
+            if output_item is None:
+                return
+
+            texture = self.inventory_ui.player.inventory.get_texture(output_item)
+            self._draw_texture_and_count(texture, output_count)
+            return
+
+        if self.slot_kind == "bin":
+            fill_color = (65, 24, 24, 220)
+            border_color = (220, 120, 120, 220)
+            if self.is_hovered:
+                fill_color = (82, 30, 30, 230)
+                border_color = (240, 150, 150, 240)
+            if self.is_pressed:
+                fill_color = (54, 20, 20, 235)
+                border_color = (255, 180, 180, 255)
+
+            local_rect = arcade.rect.XYWH(self.width / 2, self.height / 2, self.width, self.height)
+            arcade.draw_rect_filled(local_rect, fill_color)
+            arcade.draw_rect_outline(local_rect, border_color, 2)
+
+            slot = self.inventory_ui.bin_slot
+            if slot.item is None:
+                return
+
+            texture = self.inventory_ui.player.inventory.get_texture(slot.item)
+            self._draw_texture_and_count(texture, slot.count)
 
 
 class InventoryUI(arcade.gui.UIAnchorLayout):
@@ -184,9 +252,14 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
         self.slot_size = 52
         self.slot_gap = 10
         self.crafting_slots = [InventorySlot() for _ in range(9)]
+        self.conversion_input_slot = InventorySlot()
+        self.bin_slot = InventorySlot()
         self._inventory_title_label = None
         self._crafting_title_label = None
         self._crafting_arrow_label = None
+        self._conversion_title_label = None
+        self._conversion_arrow_label = None
+        self._bin_title_label = None
         self._labels_ready = False
         self._ensure_label_widgets()
         self._slot_widgets: list[SlotUIWidget] = []
@@ -229,6 +302,33 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
             align="center",
             size_hint=None,
         )
+        self._conversion_title_label = arcade.gui.UILabel(
+            text="Block -> Background",
+            width=320,
+            height=22,
+            font_size=15,
+            text_color=arcade.color.WHITE,
+            align="left",
+            size_hint=None,
+        )
+        self._conversion_arrow_label = arcade.gui.UILabel(
+            text="->",
+            width=84,
+            height=34,
+            font_size=26,
+            text_color=arcade.color.WHITE,
+            align="center",
+            size_hint=None,
+        )
+        self._bin_title_label = arcade.gui.UILabel(
+            text="Bin",
+            width=52,
+            height=22,
+            font_size=15,
+            text_color=arcade.color.WHITE,
+            align="center",
+            size_hint=None,
+        )
         self._labels_ready = True
 
     def update_screen_size(self, width: int, height: int):
@@ -246,13 +346,36 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
         grid_left_offset = 30
         crafting_grid_left_offset = 650
         grid_to_hotbar_gap = 20
+        aligned_row_extra_down = 20
+        cols = 9
+        top_rows = 3
+        inv = self.player.inventory
+
+        main_grid_width = cols * self.slot_size + (cols - 1) * self.slot_gap
+        main_grid_height = top_rows * self.slot_size + (top_rows - 1) * self.slot_gap
+        hotbar_top_offset = grid_top_offset + main_grid_height + grid_to_hotbar_gap + aligned_row_extra_down
+
+        conversion_top_offset = hotbar_top_offset
+        conversion_left_offset = crafting_grid_left_offset
+        result_slot_left_offset = 900
+        bin_left_offset = result_slot_left_offset
 
         # Statische Labels als echte GUI-Widgets.
         if self._labels_ready:
             inventory_label = self._inventory_title_label
             crafting_label = self._crafting_title_label
             arrow_label = self._crafting_arrow_label
-            if inventory_label is None or crafting_label is None or arrow_label is None:
+            conversion_label = self._conversion_title_label
+            conversion_arrow_label = self._conversion_arrow_label
+            bin_label = self._bin_title_label
+            if (
+                inventory_label is None
+                or crafting_label is None
+                or arrow_label is None
+                or conversion_label is None
+                or conversion_arrow_label is None
+                or bin_label is None
+            ):
                 return
 
             self.add(
@@ -276,13 +399,27 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
                 anchor_y="top",
                 align_y=-122,
             )
-
-        cols = 9
-        top_rows = 3
-        inv = self.player.inventory
-
-        main_grid_width = cols * self.slot_size + (cols - 1) * self.slot_gap
-        main_grid_height = top_rows * self.slot_size + (top_rows - 1) * self.slot_gap
+            self.add(
+                conversion_label,
+                anchor_x="left",
+                align_x=conversion_left_offset,
+                anchor_y="top",
+                align_y=-(conversion_top_offset - 24),
+            )
+            self.add(
+                conversion_arrow_label,
+                anchor_x="left",
+                align_x=conversion_left_offset + 8,
+                anchor_y="top",
+                align_y=-(conversion_top_offset + 8),
+            )
+            self.add(
+                bin_label,
+                anchor_x="left",
+                align_x=bin_left_offset,
+                anchor_y="top",
+                align_y=-(conversion_top_offset - 24),
+            )
 
         main_grid = arcade.gui.UIGridLayout(
             width=main_grid_width,
@@ -323,7 +460,7 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
             anchor_x="left",
             align_x=grid_left_offset,
             anchor_y="top",
-            align_y=-(grid_top_offset + main_grid_height + grid_to_hotbar_gap),
+            align_y=-hotbar_top_offset,
         )
 
         for hotbar_col in range(inv.HOTBAR_SIZE):
@@ -361,11 +498,41 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
         self.add(
             result_widget,
             anchor_x="left",
-            align_x=900,
+            align_x=result_slot_left_offset,
             anchor_y="top",
             align_y=-122,
         )
         self._slot_widgets.append(result_widget)
+
+        conversion_input_widget = SlotUIWidget(self, "conversion_input", None)
+        self.add(
+            conversion_input_widget,
+            anchor_x="left",
+            align_x=conversion_left_offset,
+            anchor_y="top",
+            align_y=-conversion_top_offset,
+        )
+        self._slot_widgets.append(conversion_input_widget)
+
+        conversion_output_widget = SlotUIWidget(self, "conversion_output", None)
+        self.add(
+            conversion_output_widget,
+            anchor_x="left",
+            align_x=conversion_left_offset + self.slot_size + 56,
+            anchor_y="top",
+            align_y=-conversion_top_offset,
+        )
+        self._slot_widgets.append(conversion_output_widget)
+
+        bin_widget = SlotUIWidget(self, "bin", None)
+        self.add(
+            bin_widget,
+            anchor_x="left",
+            align_x=bin_left_offset,
+            anchor_y="top",
+            align_y=-conversion_top_offset,
+        )
+        self._slot_widgets.append(bin_widget)
 
     def toggle(self):
         """Schaltet das Inventar ein oder aus."""
@@ -378,6 +545,12 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
             handled = self._handle_crafting_slot_click(slot_index, button, modifiers)
         elif slot_kind == "result":
             handled = self._handle_result_slot_click(button)
+        elif slot_kind == "conversion_input":
+            handled = self._handle_conversion_input_slot_click(button)
+        elif slot_kind == "conversion_output":
+            handled = self._handle_conversion_output_slot_click(button)
+        elif slot_kind == "bin":
+            handled = self._handle_bin_slot_click(button)
         elif slot_kind == "inventory" and slot_index is not None:
             handled = self._handle_inventory_slot_click(slot_index, button, modifiers)
         else:
@@ -404,7 +577,7 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
         """Gibt das Rechteck eines Slots als (left, right, bottom, top) zurück."""
         rows = 4
         cols = 9
-        hotbar_gap = 20
+        hotbar_gap = 40
         player_inventory = self.player.inventory
         panel = self._panel_bounds()
         grid_left = panel["left"] + 30
@@ -445,6 +618,27 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
         top = panel["top"] - 122
         return arcade.rect.XYWH(left + self.slot_size / 2, top - self.slot_size / 2, self.slot_size, self.slot_size)
 
+    def _conversion_input_slot_rect(self):
+        """Gibt das Rechteck des Input-Slots fuer die Block-Konvertierung zurueck."""
+        panel = self._panel_bounds()
+        left = panel["left"] + 650
+        top = panel["top"] - (60 + (3 * self.slot_size + 2 * self.slot_gap) + 40)
+        return arcade.rect.XYWH(left + self.slot_size / 2, top - self.slot_size / 2, self.slot_size, self.slot_size)
+
+    def _conversion_output_slot_rect(self):
+        """Gibt das Rechteck des Output-Slots fuer die Block-Konvertierung zurueck."""
+        panel = self._panel_bounds()
+        left = panel["left"] + 650 + self.slot_size + 56
+        top = panel["top"] - (60 + (3 * self.slot_size + 2 * self.slot_gap) + 40)
+        return arcade.rect.XYWH(left + self.slot_size / 2, top - self.slot_size / 2, self.slot_size, self.slot_size)
+
+    def _bin_slot_rect(self):
+        """Gibt das Rechteck des Bin-Slots zurück."""
+        panel = self._panel_bounds()
+        left = panel["right"] - 100
+        top = panel["top"] - (60 + (3 * self.slot_size + 2 * self.slot_gap) + 40)
+        return arcade.rect.XYWH(left + self.slot_size / 2, top - self.slot_size / 2, self.slot_size, self.slot_size)
+
     def _handle_crafting_slot_click(self, crafting_index: int, button: int, modifiers: int):
         """Klicklogik fuer einen Crafting-Slot."""
         if button == arcade.MOUSE_BUTTON_LEFT and (modifiers & arcade.key.MOD_SHIFT):
@@ -473,6 +667,42 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
 
         self._consume_crafting_materials(1, pattern, offset)
         return True
+
+    def _handle_conversion_input_slot_click(self, button: int):
+        """Klicklogik fuer den Input-Slot der Block-Hintergrund-Konvertierung."""
+        if button == arcade.MOUSE_BUTTON_LEFT:
+            return self._place_in_conversion_input_slot()
+        if button == arcade.MOUSE_BUTTON_RIGHT:
+            self.conversion_input_slot.item = None
+            self.conversion_input_slot.count = 0
+            return True
+        return False
+
+    def _handle_conversion_output_slot_click(self, button: int):
+        """Klicklogik fuer den Output-Slot der Block-Hintergrund-Konvertierung."""
+        if button != arcade.MOUSE_BUTTON_LEFT:
+            return False
+
+        output_item, _ = self._conversion_result_info()
+        if output_item is None:
+            return False
+
+        inventory = self.player.inventory
+        remaining = inventory.add_item(output_item, 1)
+        if remaining > 0:
+            return False
+
+        self.conversion_input_slot.count -= 1
+        if self.conversion_input_slot.count <= 0:
+            self.conversion_input_slot.item = None
+            self.conversion_input_slot.count = 0
+        return True
+
+    def _handle_bin_slot_click(self, button: int):
+        """Klicklogik fuer den Bin-Slot."""
+        if button != arcade.MOUSE_BUTTON_LEFT:
+            return False
+        return self._place_in_bin_slot()
 
     def _handle_inventory_slot_click(self, slot_index: int, button: int, modifiers: int):
         """Klicklogik fuer einen Spieler-Inventar-Slot."""
@@ -623,6 +853,90 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
             self.crafting_slots[index].item = None
             self.crafting_slots[index].count = 0
 
+    def _conversion_result_info(self):
+        """Gibt (Ergebnisblock, Anzahl) für die aktive Block-Konvertierung zurück."""
+        slot = self.conversion_input_slot
+        if slot.item is None or slot.count <= 0:
+            return None, 0
+
+        if not self.player.inventory.is_block_id(slot.item):
+            return None, 0
+
+        partner_block = get_convertible_partner_block_id(slot.item)
+        if partner_block is None:
+            return None, 0
+
+        return partner_block, slot.count
+
+    def _place_in_conversion_input_slot(self):
+        """Verschiebt Stacks zwischen gewähltem Hotbar-Slot und Konvertierungs-Input."""
+        inventory = self.player.inventory
+        selected_hotbar_index = inventory.HOTBAR_START + self.player.selected_hotbar_slot
+        selected_slot = inventory.get_slot(selected_hotbar_index)
+        target_slot = self.conversion_input_slot
+
+        if selected_slot is None:
+            return False
+
+        if selected_slot.item is not None:
+            is_convertible = (
+                inventory.is_block_id(selected_slot.item)
+                and get_convertible_partner_block_id(selected_slot.item) is not None
+            )
+            if not is_convertible:
+                return False
+
+            if target_slot.item is None:
+                target_slot.item = selected_slot.item
+                target_slot.count = selected_slot.count
+                selected_slot.item = None
+                selected_slot.count = 0
+                return True
+
+            if target_slot.item == selected_slot.item:
+                target_slot.count += selected_slot.count
+                selected_slot.item = None
+                selected_slot.count = 0
+                return True
+
+            return False
+
+        if target_slot.item is not None:
+            selected_slot.item = target_slot.item
+            selected_slot.count = target_slot.count
+            target_slot.item = None
+            target_slot.count = 0
+            return True
+
+        return False
+
+    def _place_in_bin_slot(self):
+        """Bin-Verhalten: Inhalt entnehmbar, Überlagern verwirft alten Inhalt."""
+        inventory = self.player.inventory
+        selected_hotbar_index = inventory.HOTBAR_START + self.player.selected_hotbar_slot
+        selected_slot = inventory.get_slot(selected_hotbar_index)
+        target_slot = self.bin_slot
+
+        if selected_slot is None:
+            return False
+
+        if selected_slot.item is not None:
+            # Liegt bereits etwas im Bin, wird es beim neuen Ablegen gelöscht.
+            target_slot.item = selected_slot.item
+            target_slot.count = selected_slot.count
+            selected_slot.item = None
+            selected_slot.count = 0
+            return True
+
+        if target_slot.item is not None:
+            selected_slot.item = target_slot.item
+            selected_slot.count = target_slot.count
+            target_slot.item = None
+            target_slot.count = 0
+            return True
+
+        return False
+
     def _place_in_crafting_slot(self, slot_index: int):
         """Verschiebt Stacks zwischen gewähltem Hotbar-Slot und Crafting-Slot."""
         inventory = self.player.inventory
@@ -671,6 +985,18 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
         result_rect = self._result_slot_rect()
         if result_rect.left <= x <= result_rect.right and result_rect.bottom <= y <= result_rect.top:
             return self.handle_slot_widget_click("result", None, button, modifiers)
+
+        conversion_input_rect = self._conversion_input_slot_rect()
+        if conversion_input_rect.left <= x <= conversion_input_rect.right and conversion_input_rect.bottom <= y <= conversion_input_rect.top:
+            return self.handle_slot_widget_click("conversion_input", None, button, modifiers)
+
+        conversion_output_rect = self._conversion_output_slot_rect()
+        if conversion_output_rect.left <= x <= conversion_output_rect.right and conversion_output_rect.bottom <= y <= conversion_output_rect.top:
+            return self.handle_slot_widget_click("conversion_output", None, button, modifiers)
+
+        bin_rect = self._bin_slot_rect()
+        if bin_rect.left <= x <= bin_rect.right and bin_rect.bottom <= y <= bin_rect.top:
+            return self.handle_slot_widget_click("bin", None, button, modifiers)
 
         slot_index = self.get_slot_index_at(x, y)
         if slot_index is None:
