@@ -29,6 +29,7 @@ from ui.bubble_ui import BubbleUI
 from ui.health_ui import HealthUI
 from ui.hotbar import Hotbar
 from ui.inventory_ui import InventoryUI
+from game_menu_view import GameMenuView
 from settings import (
     BACKGROUND_COLOR,
     CHUNK_WIDTH,
@@ -61,12 +62,17 @@ from world_generation import (
 DEBUG_SPAWN_MOB_CLASS = Slime
 
 
-class GameWindow(arcade.Window):
+class GameView(arcade.View):
     """Ein kleines Spiel-Fenster mit Spieler und generierter Welt."""
 
-    def __init__(self):
-        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, WINDOW_TITLE)
+    def __init__(self, seed: int | None = None, world_name: str = "World"):
+        super().__init__()
         arcade.set_background_color(BACKGROUND_COLOR)
+        self.world_name = world_name or "World"
+        self.start_world_seed = WORLD_SEED if seed is None else seed
+        self.start_fullscreen = START_FULLSCREEN
+        self.show_start_menu = False
+        self.start_menu_seed_text = str(self.start_world_seed)
         self.world = World()
         self.player = Player(world=self.world)
         self.player_sprite_list = arcade.SpriteList()
@@ -84,7 +90,6 @@ class GameWindow(arcade.Window):
         self.bubble_ui = BubbleUI(self.player, self.hotbar, self.health_ui)
         self.inventory_ui = InventoryUI(self.player, SCREEN_WIDTH, SCREEN_HEIGHT)
         self.ui_manager = arcade.gui.UIManager()
-        self.ui_manager.enable()
         self.inventory_anchor = arcade.gui.UIAnchorLayout(size_hint=(1.0, 1.0))
         self.ui_manager.add(self.bubble_ui)
         self.ui_manager.add(self.hotbar)
@@ -101,18 +106,17 @@ class GameWindow(arcade.Window):
         self.camera = arcade.Camera2D()
         self.ui_camera = arcade.Camera2D()
         self.physics = AABBPhysics(self.world)
-        self.light_layer = LightLayer(self.width, self.height)
-        self.lighting = LightingSystem(self)
-        self.light_layer = self.light_layer
-        self.torch_light_color = self.lighting.torch_light_color
+        self.light_layer: LightLayer | None = None
+        self.lighting: LightingSystem | None = None
+        self.torch_light_color = (255, 190, 100)
         self.lava_light_color = (255, 122, 68)
-        self.player_torch_light = self.lighting.player_torch_light
-        self.placed_torch_lights: dict[tuple[int, int], Light] = self.lighting.placed_torch_lights
+        self.player_torch_light: Light | None = None
+        self.placed_torch_lights: dict[tuple[int, int], Light] = {}
         self.sampled_lava_lights: dict[tuple[int, int], Light] = {}
-        self.sky_shader_program = self.lighting.sky_shader_program
-        self.sky_quad = self.lighting.sky_quad
-        self.sun_sprite = self.lighting.sun_sprite
-        self.moon_sprite = self.lighting.moon_sprite
+        self.sky_shader_program = None
+        self.sky_quad = None
+        self.sun_sprite = None
+        self.moon_sprite = None
         self.render_tile_range: tuple[int, int] | None = None
         self.frame_count = 0
         self.fps_time_accumulator = 0.0
@@ -146,17 +150,52 @@ class GameWindow(arcade.Window):
         self.sun_radius = 34
         self.moon_radius = 26
         self.celestial_size_px = 35
-        self.start_world_seed = WORLD_SEED
-        self.start_fullscreen = START_FULLSCREEN
-        self.show_start_menu = False
-        self.start_menu_seed_text = str(self.start_world_seed)
         self.game_over = False
+        self._runtime_initialized = False
 
-        if self.start_fullscreen:
-            self.set_fullscreen(True)
+    def _initialize_runtime(self):
+        """Initialisiert GL-abhängige Systeme erst mit aktivem Fenster."""
+        if self._runtime_initialized:
+            return
+        if self.window is None:
+            return
 
-        # TODO_STUDENT (⭐⭐⭐): Startmenü standardmäßig anzeigen und hier konfigurieren.
-        self._setup_start_menu_stub()
+        self.light_layer = LightLayer(int(self.window.width), int(self.window.height))
+        self.lighting = LightingSystem(self)
+        self.torch_light_color = self.lighting.torch_light_color
+        self.player_torch_light = self.lighting.player_torch_light
+        self.placed_torch_lights = self.lighting.placed_torch_lights
+        self.sky_shader_program = self.lighting.sky_shader_program
+        self.sky_quad = self.lighting.sky_quad
+        self.sun_sprite = self.lighting.sun_sprite
+        self.moon_sprite = self.lighting.moon_sprite
+        self._runtime_initialized = True
+        self.setup(seed_override=self.start_world_seed)
+
+    def on_show_view(self):
+        """Aktiviert UI-Systeme, wenn die View sichtbar wird."""
+        self._initialize_runtime()
+        self.ui_manager.enable()
+        if self.window is not None:
+            # Diese View kann versteckt gewesen sein, waehrend Fullscreen umgeschaltet wurde.
+            self.on_resize(int(self.window.width), int(self.window.height))
+        # Verhindert haengende Bewegungszustände nach View-Wechseln.
+        self.left_pressed = False
+        self.right_pressed = False
+        self.jump_pressed = False
+        if hasattr(self, "player") and self.player is not None:
+            self.player.stop_horizontal()
+
+    def on_hide_view(self):
+        """Deaktiviert UI-Systeme, wenn die View ausgeblendet wird."""
+        self.ui_manager.disable()
+
+    @property
+    def ctx(self):
+        """Kompatibilitaet: LightingSystem nutzt self.ctx wie zuvor beim Window."""
+        if self.window is None:
+            raise RuntimeError("GameView has no window context yet")
+        return self.window.ctx
 
     def _lerp_color(self, a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
         """Wrapper to the lighting system implementation."""
@@ -322,7 +361,8 @@ class GameWindow(arcade.Window):
         except ValueError:
             self.start_world_seed = WORLD_SEED
 
-        self.set_fullscreen(self.start_fullscreen)
+        if self.window is not None:
+            self.window.set_fullscreen(self.start_fullscreen)
         self.setup(seed_override=self.start_world_seed)
 
     def _handle_start_menu_key_stub(self, symbol: int):
@@ -889,6 +929,9 @@ class GameWindow(arcade.Window):
 
     def setup(self, seed_override: int | None = None):
         """Initialisiert den Spielzustand."""
+        if self.light_layer is None or self.lighting is None:
+            return
+
         self.game_over = False
         self.frame_count = 0
         self.world = World(seed=self.start_world_seed if seed_override is None else seed_override)
@@ -915,9 +958,9 @@ class GameWindow(arcade.Window):
         self.inventory_ui = InventoryUI(self.player, SCREEN_WIDTH, SCREEN_HEIGHT)
         self.ui_manager.clear()
         self.inventory_anchor = arcade.gui.UIAnchorLayout(size_hint=(1.0, 1.0))
+        self.ui_manager.add(self.bubble_ui)
         self.ui_manager.add(self.hotbar)
         self.ui_manager.add(self.health_ui)
-        self.ui_manager.add(self.bubble_ui)
         self.ui_manager.add(self.inventory_anchor)
         self.inventory_anchor.add(self.inventory_ui, anchor_x="center", anchor_y="center")
         self.jump_pressed = False
@@ -937,7 +980,7 @@ class GameWindow(arcade.Window):
         self.camera.position = self._clamped_camera_position()
         self.world.update_loaded_chunks(self.player.center_x)
         self._rebuild_world_sprites()
-        self.light_layer.resize(self.width, self.height)
+        self.light_layer.resize(int(self.width), int(self.height))
         self._sync_torch_lights()
 
     def spawn_mob(self, mob_class, x: float, y: float, **mob_kwargs):
@@ -1203,12 +1246,6 @@ class GameWindow(arcade.Window):
 
     def on_draw(self):
         """Zeichnet die Szene und die Minecraft-artige Hotbar."""
-        if self.show_start_menu:
-            self.clear((0, 0, 0, 255))
-            self.ui_camera.use()
-            self._draw_start_menu_stub()
-            return
-
         self.clear((0, 0, 0, 255))
 
         with self.light_layer:
@@ -1284,19 +1321,13 @@ class GameWindow(arcade.Window):
 
     def on_key_press(self, symbol: int, modifiers: int):
         """Reagiert auf Tastatureingaben."""
-        if self.show_start_menu:
-            if self._handle_start_menu_key_stub(symbol):
-                return
+        if symbol == arcade.key.ESCAPE and self.window is not None:
+            self.window.show_view(GameMenuView(self))
+            return
 
         if self.game_over:
             if symbol == arcade.key.ENTER:
                 self.setup()
-            return
-
-        if symbol == arcade.key.M:
-            # TODO_STUDENT (⭐⭐⭐): Startmenü beim Spielstart anzeigen statt nur per M-Taste.
-            self.show_start_menu = True
-            self.start_menu_seed_text = str(self.start_world_seed)
             return
 
         cmd_down = bool(modifiers & arcade.key.MOD_COMMAND)
@@ -1344,9 +1375,11 @@ class GameWindow(arcade.Window):
 
         if symbol in (arcade.key.A, arcade.key.LEFT):
             self.left_pressed = True
+            self.right_pressed = False
             self.player.move_left()
         elif symbol in (arcade.key.D, arcade.key.RIGHT):
             self.right_pressed = True
+            self.left_pressed = False
             self.player.move_right()
         elif symbol == arcade.key.Q:
             if self.mouse_screen_x is not None and self.mouse_screen_y is not None:
@@ -1446,7 +1479,10 @@ class GameWindow(arcade.Window):
     def on_resize(self, width: int, height: int):
         """Passt abhängige Systeme bei Fenstergrößenänderung an."""
         super().on_resize(width, height)
-        self.light_layer.resize(width, height)
+        self.camera.match_window()
+        self.ui_camera.match_window()
+        if self.light_layer is not None:
+            self.light_layer.resize(int(width), int(height))
         self.inventory_ui.update_screen_size(width, height)
         self.hotbar.trigger_full_render()
         self.health_ui.trigger_full_render()
@@ -1456,9 +1492,16 @@ class GameWindow(arcade.Window):
 
 def main():
     """Startet die Spielschleife."""
-    window = GameWindow()
-    window.setup()
+    from start_menu_view import StartMenuView
+
+    window = arcade.Window(SCREEN_WIDTH, SCREEN_HEIGHT, WINDOW_TITLE)
+    if START_FULLSCREEN:
+        window.set_fullscreen(True)
+    window.show_view(StartMenuView())
     arcade.run()
+
+
+GameWindow = GameView
 
 
 if __name__ == "__main__":

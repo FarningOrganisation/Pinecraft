@@ -6,8 +6,9 @@ Konstanten für Blöcke ergänzt werden.
 """
 import random
 
+# Kleineres, gängiges Desktop-Fensterformat (16:10) für den Windowed-Modus.
 SCREEN_WIDTH = 1280
-SCREEN_HEIGHT = 720
+SCREEN_HEIGHT = 800
 WINDOW_TITLE = "Pinecraft"
 TARGET_FPS = 60
 BACKGROUND_COLOR = (135, 206, 235, 255)  # Heller Himmelblau in RGBA

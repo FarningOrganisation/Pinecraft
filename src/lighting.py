@@ -755,10 +755,14 @@ class LightingSystem:
         """Bildschirmposition auf der stationären Himmelsellipse."""
         p = max(0.0, min(1.0, progress))
         theta = math.pi * p
+
+        # Der hoechste Punkt (Mittag) bleibt bei jeder Aufloesung oben sichtbar.
         center_x = self.window.width * 0.5
-        center_y = self.window.height * 0.30
+        center_y = self.window.height * 0.26
         radius_x = self.window.width * 0.62
-        radius_y = self.window.height * 0.69
+        top_margin = 26.0
+        noon_apex_y = self.window.height - top_margin
+        radius_y = max(80.0, noon_apex_y - center_y)
         x = center_x + radius_x * math.cos(theta)
         y = center_y + radius_y * math.sin(theta)
         return x, y
