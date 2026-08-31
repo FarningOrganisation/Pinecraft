@@ -65,11 +65,12 @@ DEBUG_SPAWN_MOB_CLASS = Slime
 class GameView(arcade.View):
     """Ein kleines Spiel-Fenster mit Spieler und generierter Welt."""
 
-    def __init__(self, seed: int | None = None, world_name: str = "World"):
+    def __init__(self, seed: int | None = None, world_name: str = "World", save_data: dict | None = None):
         super().__init__()
         arcade.set_background_color(BACKGROUND_COLOR)
         self.world_name = world_name or "World"
         self.start_world_seed = WORLD_SEED if seed is None else seed
+        self._pending_save_data = save_data
         self.start_fullscreen = START_FULLSCREEN
         self.show_start_menu = False
         self.start_menu_seed_text = str(self.start_world_seed)
@@ -977,6 +978,137 @@ class GameView(arcade.View):
         self.lava_sprite_maps = {}
         self._debug_logged_tiny_edge_cells = set()
         self.render_tile_range = None
+
+        if self._pending_save_data is not None:
+            self._restore_from_save_data(self._pending_save_data)
+            self._pending_save_data = None
+            return
+
+        self.camera.position = self._clamped_camera_position()
+        self.world.update_loaded_chunks(self.player.center_x)
+        self._rebuild_world_sprites()
+        self.light_layer.resize(int(self.width), int(self.height))
+        self._sync_torch_lights()
+
+    @staticmethod
+    def _decode_saved_chunk_blocks(raw_data) -> dict[int, list[list[int]]]:
+        decoded: dict[int, list[list[int]]] = {}
+        if not isinstance(raw_data, dict):
+            return decoded
+        for chunk_key, blocks in raw_data.items():
+            try:
+                chunk_x = int(chunk_key)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(blocks, list):
+                continue
+            decoded[chunk_x] = [list(row) for row in blocks if isinstance(row, list)]
+        return decoded
+
+    @staticmethod
+    def _decode_saved_chunk_liquid(raw_data) -> dict[int, dict[tuple[int, int], float]]:
+        decoded: dict[int, dict[tuple[int, int], float]] = {}
+        if not isinstance(raw_data, dict):
+            return decoded
+
+        for chunk_key, cells in raw_data.items():
+            try:
+                chunk_x = int(chunk_key)
+            except (TypeError, ValueError):
+                continue
+
+            if not isinstance(cells, list):
+                continue
+
+            chunk_liquid: dict[tuple[int, int], float] = {}
+            for cell in cells:
+                if not isinstance(cell, (list, tuple)) or len(cell) != 3:
+                    continue
+                local_x = int(cell[0])
+                y = int(cell[1])
+                amount = float(cell[2])
+                if amount <= 0.0:
+                    continue
+                chunk_liquid[(local_x, y)] = max(0.0, min(1.0, amount))
+
+            decoded[chunk_x] = chunk_liquid
+        return decoded
+
+    def _restore_inventory_slots_from_save(self, save_slots) -> None:
+        if not isinstance(save_slots, list):
+            return
+
+        for slot in self.player.inventory.slots:
+            slot.item = None
+            slot.count = 0
+
+        max_slot_count = min(len(save_slots), len(self.player.inventory.slots))
+        for index in range(max_slot_count):
+            entry = save_slots[index]
+            if not isinstance(entry, dict):
+                continue
+            item = entry.get("item")
+            count = int(entry.get("count", 0))
+            if item is None or count <= 0:
+                continue
+            self.player.inventory.slots[index].item = int(item)
+            self.player.inventory.slots[index].count = count
+
+    def _restore_from_save_data(self, save_data: dict) -> None:
+        world_data = save_data.get("world", {}) if isinstance(save_data, dict) else {}
+        player_data = save_data.get("player", {}) if isinstance(save_data, dict) else {}
+        inventory_data = save_data.get("inventory", {}) if isinstance(save_data, dict) else {}
+        state_data = save_data.get("state", {}) if isinstance(save_data, dict) else {}
+        meta_data = save_data.get("meta", {}) if isinstance(save_data, dict) else {}
+
+        save_seed = world_data.get("seed")
+        if save_seed is not None:
+            self.start_world_seed = int(save_seed)
+            self.world.seed = int(save_seed)
+
+        loaded_name = meta_data.get("world_name")
+        if isinstance(loaded_name, str) and loaded_name.strip():
+            self.world_name = loaded_name.strip()
+
+        self.world.chunks = {}
+        self.world.saved_chunk_blocks = self._decode_saved_chunk_blocks(world_data.get("changed_blocks"))
+        self.world.saved_chunk_water = self._decode_saved_chunk_liquid(world_data.get("changed_water"))
+        self.world.saved_chunk_lava = self._decode_saved_chunk_liquid(world_data.get("changed_lava"))
+        self.world.pending_generated_blocks = {}
+
+        placed_items: dict[tuple[int, int], int] = {}
+        for entry in world_data.get("items", []):
+            if not isinstance(entry, (list, tuple)) or len(entry) != 3:
+                continue
+            world_x = int(entry[0])
+            tile_y = int(entry[1])
+            item_id = int(entry[2])
+            placed_items[(world_x, tile_y)] = item_id
+        self.world.placed_items = placed_items
+
+        self.player.center_x = float(player_data.get("position", {}).get("x", self.player.center_x))
+        self.player.center_y = float(player_data.get("position", {}).get("y", self.player.center_y))
+        self.player.change_x = float(player_data.get("velocity", {}).get("x", 0.0))
+        self.player.change_y = float(player_data.get("velocity", {}).get("y", 0.0))
+        self.player.max_health = int(player_data.get("max_health", self.player.max_health))
+        self.player.health = int(player_data.get("health", self.player.health))
+        self.player.max_air_bubbles = int(player_data.get("max_air_bubbles", self.player.max_air_bubbles))
+        self.player.air_bubbles = int(player_data.get("air_bubbles", self.player.air_bubbles))
+        self.player.selected_hotbar_slot = max(
+            0,
+            min(
+                self.player.inventory.HOTBAR_SIZE - 1,
+                int(player_data.get("selected_hotbar_slot", self.player.selected_hotbar_slot)),
+            ),
+        )
+        facing_right = bool(player_data.get("facing_right", True))
+        self.player.facing_right = facing_right
+        self.player.scale_x = 1.0 if facing_right else -1.0
+
+        self._restore_inventory_slots_from_save(inventory_data.get("slots", []))
+
+        self.time_of_day = float(state_data.get("time_of_day", self.time_of_day)) % 1.0
+
         self.camera.position = self._clamped_camera_position()
         self.world.update_loaded_chunks(self.player.center_x)
         self._rebuild_world_sprites()

@@ -3,12 +3,13 @@
 import arcade
 import arcade.gui
 
+from save_system import save_game
 from settings import START_FULLSCREEN
 from start_menu_view import StartMenuView
 
 
 class GameMenuView(arcade.View):
-    """Ingame-Menue mit Fullscreen-Umschalter und Rueckweg ins Startmenue."""
+    """Ingame-Menue mit Fullscreen sowie Save-and-Back-to-Menu."""
 
     def __init__(self, game_view):
         super().__init__()
@@ -19,7 +20,7 @@ class GameMenuView(arcade.View):
         self._fullscreen_enabled = START_FULLSCREEN
         self.fullscreen_button: arcade.gui.UIFlatButton | None = None
         self._card_width = 320
-        self._card_height = 210
+        self._card_height = 230
 
     def on_show_view(self):
         self.ui_manager.enable()
@@ -50,16 +51,16 @@ class GameMenuView(arcade.View):
         )
         self.fullscreen_button = arcade.gui.UIFlatButton(text="", width=self._card_width, height=36)
         resume_button = arcade.gui.UIFlatButton(text="Resume", width=self._card_width, height=40)
-        start_menu_button = arcade.gui.UIFlatButton(text="Back To Start Menu", width=self._card_width, height=40)
+        save_and_exit_button = arcade.gui.UIFlatButton(text="Save and Back to Menu", width=self._card_width, height=40)
 
         self.fullscreen_button.on_click = self._on_toggle_fullscreen
         resume_button.on_click = self._on_resume
-        start_menu_button.on_click = self._on_back_to_start
+        save_and_exit_button.on_click = self._on_save_and_exit
 
         card.add(title)
         card.add(self.fullscreen_button)
         card.add(resume_button)
-        card.add(start_menu_button)
+        card.add(save_and_exit_button)
 
         self.root.add(card, anchor_x="center", anchor_y="center")
 
@@ -89,6 +90,16 @@ class GameMenuView(arcade.View):
     def _on_back_to_start(self, event):
         if self.window is None:
             return
+        self.window.show_view(StartMenuView())
+
+    def _on_save_and_exit(self, event):
+        if self.window is None or self.game_view is None:
+            return
+        try:
+            save_path = save_game(self.game_view)
+            print(f"[save] wrote {save_path}")
+        except Exception as exc:
+            print(f"[save] failed: {exc}")
         self.window.show_view(StartMenuView())
 
     def on_draw(self):
