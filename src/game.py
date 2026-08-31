@@ -10,6 +10,7 @@ import math
 import random
 
 import arcade
+import arcade.gui
 from arcade.gl import geometry as gl_geometry
 from arcade.future.light import Light, LightLayer
 
@@ -79,9 +80,17 @@ class GameWindow(arcade.Window):
         self.mob_spawn_timer = 0.0
         self.max_active_mobs = 5
         self.hotbar = Hotbar(self.player)
-        self.health_ui = HealthUI(self.player)
-        self.bubble_ui = BubbleUI(self.player)
+        self.health_ui = HealthUI(self.player, self.hotbar)
+        self.bubble_ui = BubbleUI(self.player, self.hotbar, self.health_ui)
         self.inventory_ui = InventoryUI(self.player, SCREEN_WIDTH, SCREEN_HEIGHT)
+        self.ui_manager = arcade.gui.UIManager()
+        self.ui_manager.enable()
+        self.inventory_anchor = arcade.gui.UIAnchorLayout(size_hint=(1.0, 1.0))
+        self.ui_manager.add(self.hotbar)
+        self.ui_manager.add(self.health_ui)
+        self.ui_manager.add(self.bubble_ui)
+        self.ui_manager.add(self.inventory_anchor)
+        self.inventory_anchor.add(self.inventory_ui, anchor_x="center", anchor_y="center")
         self.chunk_sprite_lists: dict[int, arcade.SpriteList] = {}
         self.chunk_sprite_maps: dict[int, dict[tuple[int, int], arcade.Sprite]] = {}
         self.water_sprite_list = arcade.SpriteList()
@@ -901,9 +910,16 @@ class GameWindow(arcade.Window):
         self.mobs = []
         self.mob_spawn_timer = 0.0
         self.hotbar = Hotbar(self.player)
-        self.health_ui = HealthUI(self.player)
-        self.bubble_ui = BubbleUI(self.player)
+        self.health_ui = HealthUI(self.player, self.hotbar)
+        self.bubble_ui = BubbleUI(self.player, self.hotbar, self.health_ui)
         self.inventory_ui = InventoryUI(self.player, SCREEN_WIDTH, SCREEN_HEIGHT)
+        self.ui_manager.clear()
+        self.inventory_anchor = arcade.gui.UIAnchorLayout(size_hint=(1.0, 1.0))
+        self.ui_manager.add(self.hotbar)
+        self.ui_manager.add(self.health_ui)
+        self.ui_manager.add(self.bubble_ui)
+        self.ui_manager.add(self.inventory_anchor)
+        self.inventory_anchor.add(self.inventory_ui, anchor_x="center", anchor_y="center")
         self.jump_pressed = False
         self.physics = AABBPhysics(self.world)
         for light in list(self.light_layer):
@@ -1227,10 +1243,13 @@ class GameWindow(arcade.Window):
         self._draw_moon_no_ambient()
 
         self.ui_camera.use()
-        self.health_ui.draw(self.hotbar)
-        self.bubble_ui.draw(self.hotbar, self.health_ui)
-        self.hotbar.draw()
-        self.inventory_ui.draw()
+        self.hotbar.trigger_render()
+        self.health_ui.trigger_render()
+        self.bubble_ui.trigger_render()
+        if self.inventory_ui.visible:
+            # Dynamische Slot-Inhalte koennen sich pro Frame aendern.
+            self.inventory_ui.trigger_render()
+        self.ui_manager.draw()
         self.fps_text.y = self.height - 16
         self.fps_text.draw()
 
@@ -1316,6 +1335,11 @@ class GameWindow(arcade.Window):
         if 49 <= symbol <= 57:
             slot_index = symbol - 49
             self.player.select_hotbar_slot(slot_index)
+            self.hotbar.trigger_render()
+            self.health_ui.trigger_render()
+            self.bubble_ui.trigger_render()
+            if self.inventory_ui.visible:
+                self.inventory_ui.trigger_render()
             return
 
         if symbol in (arcade.key.A, arcade.key.LEFT):
@@ -1333,10 +1357,6 @@ class GameWindow(arcade.Window):
             self.jump_pressed = True
             if self.player.in_water or self.player.feet_in_water:
                 return
-            if self.player.on_ground:
-                self.player.jump()
-        elif symbol == arcade.key.E:
-            self.inventory_ui.toggle()
             if self.player.on_ground:
                 self.player.jump()
         elif symbol == arcade.key.E:
@@ -1367,7 +1387,6 @@ class GameWindow(arcade.Window):
         self.mouse_screen_y = y
 
         if self.inventory_ui.visible:
-            self.inventory_ui.handle_click(x, y, button, modifiers)
             return
 
         if button == arcade.MOUSE_BUTTON_LEFT:
@@ -1423,6 +1442,16 @@ class GameWindow(arcade.Window):
         """Merkt die letzte Mausposition auch beim Ziehen."""
         self.mouse_screen_x = x
         self.mouse_screen_y = y
+
+    def on_resize(self, width: int, height: int):
+        """Passt abhängige Systeme bei Fenstergrößenänderung an."""
+        super().on_resize(width, height)
+        self.light_layer.resize(width, height)
+        self.inventory_ui.update_screen_size(width, height)
+        self.hotbar.trigger_full_render()
+        self.health_ui.trigger_full_render()
+        self.bubble_ui.trigger_full_render()
+        self.inventory_ui.trigger_full_render()
 
 
 def main():

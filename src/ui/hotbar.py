@@ -1,17 +1,41 @@
 """Minecraft-artige Hotbar für den Spieler."""
 
 import arcade
+import arcade.gui
 
 
-class Hotbar:
+class Hotbar(arcade.gui.UIWidget):
     """Zeichnet die 9-Slot-Hotbar unten links am Bildschirm."""
 
     def __init__(self, player):
+        super().__init__()
         self.player = player
         self.slot_size = 52
         self.slot_gap = 8
         self.slot_x_start = 20
         self.slot_y = 20
+        self.size_hint = (1.0, 1.0)
+
+    def get_slot_index_at(self, x: float, y: float):
+        """Gibt den Hotbar-Slot an einer Mausposition zurück."""
+        for index in range(self.player.inventory.HOTBAR_SIZE):
+            slot_x = self.slot_x_start + index * (self.slot_size + self.slot_gap)
+            left = slot_x
+            right = slot_x + self.slot_size
+            bottom = self.slot_y
+            top = self.slot_y + self.slot_size
+            if left <= x <= right and bottom <= y <= top:
+                return index
+        return None
+
+    def on_event(self, event):
+        if isinstance(event, arcade.gui.UIMousePressEvent) and event.button == arcade.MOUSE_BUTTON_LEFT:
+            slot_index = self.get_slot_index_at(event.x, event.y)
+            if slot_index is not None:
+                self.player.select_hotbar_slot(slot_index)
+                self.trigger_render()
+                return True
+        return super().on_event(event)
 
     def draw(self):
         """Zeichnet die Hotbar und den aktuell ausgewählten Slot."""
@@ -78,3 +102,6 @@ class Hotbar:
                     anchor_x="right",
                     anchor_y="bottom",
                 )
+
+    def do_render(self, surface):
+        self.draw()

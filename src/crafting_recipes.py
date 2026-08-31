@@ -4,6 +4,7 @@ from blocks import AIR, OAK, OAK_PLANKS, COBBLESTONE, COBBLESTONE_BG
 from items import (
     CHARCOAL,
     STONE_PICKAXE,
+    STONE_SWORD,
     STICK,
     TORCH,
     IRON_PICKAXE,
@@ -19,6 +20,14 @@ CRAFTING_RECIPES = {
             [COBBLESTONE, COBBLESTONE, COBBLESTONE],
             [AIR, STICK, AIR],
             [AIR, STICK, AIR],
+        ],
+        "count": 1,
+    },
+    STONE_SWORD: {
+        "pattern": [
+            [COBBLESTONE],
+            [STICK],
+            [STICK]
         ],
         "count": 1,
     },
