@@ -16,7 +16,6 @@ from paths import textures_dir
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
 from world_generation import SEA_LEVEL
 
-CELESTIAL_HIDE_BELOW_SEA_TILES = 10
 MAX_SHADER_LOCAL_LIGHTS = 32
 SHADER_TORCH_RADIUS = 250.0
 
@@ -788,8 +787,9 @@ class LightingSystem:
         if moon_screen_pos is None:
             return None
 
-        sea_level_world_y = (SEA_LEVEL + 1.0) * TILE_SIZE
-        if self.window.camera.position[1] < sea_level_world_y - CELESTIAL_HIDE_BELOW_SEA_TILES * TILE_SIZE:
+        # Mondlicht nur dann, wenn der gleiche Underground-Indikator wie beim
+        # braunen Cave-Background noch ausreichend offenen Himmel meldet.
+        if self.sky_background_blend() > 0.65:
             return None
 
         moon_x_screen, moon_y_screen = moon_screen_pos
@@ -912,10 +912,6 @@ class LightingSystem:
         if self.sky_background_blend() > 0.65:
             return
 
-        sea_level_world_y = (SEA_LEVEL + 1.0) * TILE_SIZE
-        if self.window.camera.position[1] < sea_level_world_y - CELESTIAL_HIDE_BELOW_SEA_TILES * TILE_SIZE:
-            return
-
         sun_progress = (self.window.time_of_day - 0.25) / 0.5
         if 0.0 <= sun_progress <= 1.0:
             sun_x, sun_y = self._celestial_screen_position(sun_progress)
@@ -931,10 +927,6 @@ class LightingSystem:
     def draw_moon_no_ambient(self):
         """Zeichnet den Mond mit Originaltextur in einem separaten Pass ohne Ambient-Tint."""
         if self.sky_background_blend() > 0.65:
-            return
-
-        sea_level_world_y = (SEA_LEVEL + 1.0) * TILE_SIZE
-        if self.window.camera.position[1] < sea_level_world_y - CELESTIAL_HIDE_BELOW_SEA_TILES * TILE_SIZE:
             return
 
         moon_screen_pos = self._moon_screen_position()

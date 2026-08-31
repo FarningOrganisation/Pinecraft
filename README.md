@@ -33,6 +33,17 @@ pip install -r requirements.txt
 python main.py
 ```
 
+### Entwicklung mit Auto-Restart
+
+Wenn du nicht nach jeder Code-Aenderung neu starten willst:
+
+```bash
+python dev_hot_reload.py
+```
+
+Der Runner ueberwacht `main.py` und `src/**/*.py` und startet das Spiel
+bei Aenderungen automatisch neu.
+
 Hinweis: Der Spielcode liegt in `src/`, aber gestartet wird weiterhin bequem über `main.py` im Projekt-Root.
 
 ## Steuerung
