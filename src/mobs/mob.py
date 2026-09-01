@@ -38,9 +38,7 @@ class Mob(AnimatedSprite):
         self.flee_timer = 0.0
         self.walk_direction = 1
         self.jump_strength = 350.0
-        self.jump_cooldown = 0.0
         self.alive = True
-        self.needs_turning = False
 
         current_frame = self.current_animation.frames[0]
         self.width = current_frame.width
@@ -104,6 +102,7 @@ class Mob(AnimatedSprite):
         self.center_y += self.change_y * delta_time
         self.on_ground = False
         self._resolve_vertical_collision(previous_bottom, previous_top)
+        self._resolve_embedded_collision()
 
         if self._grounded_below():
             self.on_ground = True
@@ -111,6 +110,52 @@ class Mob(AnimatedSprite):
                 self.change_y = 0.0
 
         return self.on_ground
+
+    def _resolve_embedded_collision(self, max_passes: int = 3):
+        """Löst verbleibende Überlappungen, falls ein Mob in Blöcken feststeckt."""
+        world = self.world
+        if world is None:
+            return
+
+        skin = 0.25
+        for _ in range(max(1, int(max_passes))):
+            left = self.center_x - self.collision_width / 2
+            right = self.center_x + self.collision_width / 2
+            bottom = self.center_y - self.collision_height / 2
+            top = self.center_y + self.collision_height / 2
+
+            moved = False
+            for _tile_x, _tile_y, block_left, block_right, block_bottom, block_top in world.get_blocks_around(
+                left, right, bottom, top
+            ):
+                overlap_x = min(right, block_right) - max(left, block_left)
+                overlap_y = min(top, block_top) - max(bottom, block_bottom)
+                if overlap_x <= 0.0 or overlap_y <= 0.0:
+                    continue
+
+                block_center_x = (block_left + block_right) * 0.5
+                block_center_y = (block_bottom + block_top) * 0.5
+
+                # Bevorzuge vertikales Entklemmen leicht, um "im Boden stecken" stabil zu lösen.
+                if overlap_y <= overlap_x + 0.5:
+                    if self.center_y >= block_center_y:
+                        self.center_y += overlap_y + skin
+                        self.on_ground = True
+                    else:
+                        self.center_y -= overlap_y + skin
+                    self.change_y = 0.0
+                else:
+                    if self.center_x >= block_center_x:
+                        self.center_x += overlap_x + skin
+                    else:
+                        self.center_x -= overlap_x + skin
+                    self.change_x = 0.0
+
+                moved = True
+                break
+
+            if not moved:
+                break
 
     def _resolve_horizontal_collision(self, previous_left: float, previous_right: float):
         """Keeps the mob inside solid blocks on the x-axis."""
@@ -170,17 +215,14 @@ class Mob(AnimatedSprite):
         return block_id != AIR and is_block_solid(block_id)
 
     def _can_jump_over_obstacle(self, direction: int) -> bool:
-        """Checks whether there is room above the obstacle to perform a basic jump."""
+        """Checks whether there is room above one forward obstacle probe."""
         if self.world is None:
             return False
 
-        for step in range(1, 4):
-            probe_x = int((self.center_x + direction * (self.collision_width * 0.7 + step * TILE_SIZE)) // TILE_SIZE)
-            probe_y = int((self.center_y + self.collision_height * 0.5 + 8.0) // TILE_SIZE)
-            block_id = self.world.get_block(probe_x, probe_y, generate_if_missing=False)
-            if block_id != AIR and is_block_solid(block_id):
-                return False
-        return True
+        probe_x = int((self.center_x + direction * (self.collision_width * 0.7 + TILE_SIZE)) // TILE_SIZE)
+        probe_y = int((self.center_y + self.collision_height * 0.5 + 8.0) // TILE_SIZE)
+        block_id = self.world.get_block(probe_x, probe_y, generate_if_missing=False)
+        return block_id == AIR or not is_block_solid(block_id)
 
     def _has_headroom_for_jump(self, min_tiles: int = 2) -> bool:
         """True, wenn ueber dem Mob genug freier Raum fuer einen Sprung ist."""
@@ -204,8 +246,6 @@ class Mob(AnimatedSprite):
 
     def _try_pit_escape_jump(self) -> bool:
         """Versucht einen gezielten Sprung aus einem schmalen Loch."""
-        if self.jump_cooldown > 0.0:
-            return False
         if not self._has_headroom_for_jump(min_tiles=2):
             return False
 
@@ -225,37 +265,31 @@ class Mob(AnimatedSprite):
         self.facing_right = direction >= 0
         self.change_y = self.jump_strength * (1.0 + random.random() * 0.15)
         self.change_x = direction * self.speed * 0.35
-        self.jump_cooldown = 0.35
-        self.needs_turning = False
         return True
 
     def _update_unalerted_behavior(self, delta_time: float):
         """Default unalerted AI: wander, jump over obstacles, and turn around at walls."""
-        if self.jump_cooldown > 0.0:
-            self.jump_cooldown = max(0.0, self.jump_cooldown - delta_time)
-
         self.facing_right = self.walk_direction >= 0
+        grounded = self._grounded_below()
 
         # In engen Loechern nicht hektisch links/rechts flippen, sondern gezielt raus springen.
         if self._is_trapped_in_narrow_pit():
             if self._try_pit_escape_jump():
                 return
-            self.change_x = 0.0
-            return
+            # Ohne Cooldown weiterlaufen, damit auf der naechsten freien Gelegenheit
+            # sofort erneut gesprungen werden kann.
 
-        if self._grounded_below() and self._has_wall_in_front(self.walk_direction):
+        if grounded and self._has_wall_in_front(self.walk_direction):
+            can_jump = self._can_jump_over_obstacle(self.walk_direction)
 
-            if not self.needs_turning and self.jump_cooldown <= 0.0 and self._can_jump_over_obstacle(self.walk_direction):
-                self.change_y = self.jump_strength * (0.9 + random.random() * 0.2)
+            if can_jump:
+                jump_factor = 0.9 + random.random() * 0.2
+                self.change_y = max(self.change_y, self.jump_strength * jump_factor)
                 self.change_x = self.walk_direction * self.speed * 0.8
-                self.jump_cooldown = 0.45
-                self.needs_turning = True
                 return
 
             self.walk_direction *= -1
-            self.needs_turning = False
             self.change_x = self.walk_direction * self.speed * 0.6
-            self.jump_cooldown = max(self.jump_cooldown, 0.15)
             return
 
         self.change_x = self.walk_direction * self.speed * 0.75

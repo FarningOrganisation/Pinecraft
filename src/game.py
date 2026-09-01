@@ -64,7 +64,7 @@ from world_generation import (
 from save_system import load_save, save_game
 
 # Choose the mob type spawned via the debug key from here instead of scrolling down.
-DEBUG_SPAWN_MOB_CLASS = Slime
+DEBUG_SPAWN_MOB_CLASS = Chicken
 
 
 class GameView(arcade.View):

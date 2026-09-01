@@ -99,12 +99,10 @@ class MobDeathLifecycleTests(unittest.TestCase):
         mob = Mob.__new__(Mob)
         mob._position = (0.0, 0.0)
         mob._velocity = (0.0, 0.0)
-        mob.jump_cooldown = 0.0
         mob.walk_direction = 1
         mob.facing_right = True
         mob.speed = 100.0
         mob.jump_strength = 300.0
-        mob.needs_turning = False
         mob.change_x = 0.0
         mob.change_y = 0.0
         mob._grounded_below = lambda: True
@@ -116,30 +114,46 @@ class MobDeathLifecycleTests(unittest.TestCase):
 
         self.assertGreater(mob.change_y, 0.0)
         self.assertNotEqual(mob.change_x, 0.0)
-        self.assertGreater(mob.jump_cooldown, 0.0)
 
-    def test_mob_does_not_flip_direction_in_pit_during_jump_cooldown(self):
+    def test_mob_keeps_direction_in_pit_when_escape_not_possible(self):
         mob = Mob.__new__(Mob)
         mob._position = (0.0, 0.0)
         mob._velocity = (0.0, 0.0)
-        mob.jump_cooldown = 0.2
         mob.walk_direction = 1
         mob.facing_right = True
         mob.speed = 100.0
         mob.jump_strength = 300.0
-        mob.needs_turning = False
         mob.change_x = 12.0
         mob.change_y = 0.0
         mob._grounded_below = lambda: True
         mob._has_wall_in_front = lambda _direction: True
-        mob._has_headroom_for_jump = lambda min_tiles=2: True
+        mob._has_headroom_for_jump = lambda min_tiles=2: False
         mob._can_jump_over_obstacle = lambda _direction: True
 
         mob._update_unalerted_behavior(0.05)
 
         self.assertEqual(mob.walk_direction, 1)
-        self.assertEqual(mob.change_x, 0.0)
+        self.assertGreater(mob.change_x, 0.0)
 
+    def test_mob_keeps_direction_at_jumpable_wall(self):
+        mob = Mob.__new__(Mob)
+        mob._position = (0.0, 0.0)
+        mob._velocity = (0.0, 0.0)
+        mob.walk_direction = 1
+        mob.facing_right = True
+        mob.speed = 100.0
+        mob.jump_strength = 300.0
+        mob.change_x = 0.0
+        mob.change_y = 0.0
+        mob._is_trapped_in_narrow_pit = lambda: False
+        mob._grounded_below = lambda: True
+        mob._has_wall_in_front = lambda direction: direction == 1
+        mob._can_jump_over_obstacle = lambda direction: direction == 1
+
+        mob._update_unalerted_behavior(0.05)
+
+        self.assertEqual(mob.walk_direction, 1)
+        self.assertGreater(mob.change_x, 0.0)
 
 if __name__ == "__main__":
     unittest.main()
