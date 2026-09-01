@@ -3,6 +3,7 @@
 Ermoeglicht den Start mit `python main.py`, auch wenn der eigentliche Code in `src/` liegt.
 """
 
+import argparse
 from pathlib import Path
 import sys
 
@@ -16,5 +17,18 @@ if str(SRC_DIR) not in sys.path:
 from game import main as run_game  # noqa: E402
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Pinecraft Launcher")
+    parser.add_argument("--load-save", type=str, default=None, help="Lade direkt eine Save-Datei")
+    parser.add_argument(
+        "--dev-autosave-name",
+        type=str,
+        default=None,
+        help="Aktiviere Auto-Save beim Beenden (Save-Name ohne Dateiendung)",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    run_game()
+    args = parse_args()
+    run_game(load_save_path=args.load_save, dev_autosave_name=args.dev_autosave_name)

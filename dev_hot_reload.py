@@ -18,6 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_WATCH_DIRS = [PROJECT_ROOT / "src", PROJECT_ROOT]
 DEFAULT_EXTENSIONS = {".py"}
 IGNORE_PARTS = {".git", ".venv", "__pycache__", "saves"}
+DEFAULT_DEV_AUTOSAVE_NAME = "__dev_hot_reload__"
 
 
 def iter_watched_files(watch_dirs: Iterable[Path], extensions: set[str]) -> Iterable[Path]:
@@ -67,9 +68,13 @@ def snapshot_diff(old: dict[str, int], new: dict[str, int]) -> list[str]:
     return changed
 
 
-def start_game_process() -> subprocess.Popen:
+def start_game_process(load_save_path: Path | None = None, dev_autosave_name: str | None = None) -> subprocess.Popen:
     """Startet main.py als Kindprozess."""
     cmd = [sys.executable, "main.py"]
+    if dev_autosave_name:
+        cmd.extend(["--dev-autosave-name", dev_autosave_name])
+    if load_save_path is not None and load_save_path.exists():
+        cmd.extend(["--load-save", str(load_save_path)])
     return subprocess.Popen(cmd, cwd=str(PROJECT_ROOT))
 
 
@@ -89,6 +94,12 @@ def stop_game_process(process: subprocess.Popen) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Auto-Restart fuer Pinecraft waehrend der Entwicklung")
     parser.add_argument("--interval", type=float, default=0.35, help="Polling-Intervall in Sekunden")
+    parser.add_argument(
+        "--dev-autosave-name",
+        type=str,
+        default=DEFAULT_DEV_AUTOSAVE_NAME,
+        help="Save-Name fuer automatisches Wiederherstellen nach Restart",
+    )
     return parser.parse_args()
 
 
@@ -96,18 +107,27 @@ def main() -> int:
     args = parse_args()
     watch_dirs = DEFAULT_WATCH_DIRS
     extensions = DEFAULT_EXTENSIONS
+    autosave_name = (args.dev_autosave_name or "").strip() or DEFAULT_DEV_AUTOSAVE_NAME
+    autosave_path = PROJECT_ROOT / "saves" / f"{autosave_name}.json"
 
     print("[dev] Starte Pinecraft mit Auto-Restart...")
     print("[dev] Beobachte:")
     for d in watch_dirs:
         print(f"  - {d}")
 
-    process = start_game_process()
+    process = start_game_process(load_save_path=autosave_path, dev_autosave_name=autosave_name)
     snapshot = build_snapshot(watch_dirs, extensions)
 
     def handle_shutdown(_sig, _frame):
         print("\n[dev] Beende Auto-Restart-Runner...")
-        stop_game_process(process)
+        # Beim manuellen Stop keinen Autosave erzwingen:
+        # harter Kill verhindert den Dev-Save-Handler im Kindprozess.
+        if process.poll() is None:
+            process.kill()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
         raise SystemExit(0)
 
     signal.signal(signal.SIGINT, handle_shutdown)
@@ -132,7 +152,7 @@ def main() -> int:
                 print("[dev] Spielprozess beendet, starte neu...")
 
             stop_game_process(process)
-            process = start_game_process()
+            process = start_game_process(load_save_path=autosave_path, dev_autosave_name=autosave_name)
             snapshot = new_snapshot
 
 

@@ -8,6 +8,11 @@ Chunk-Struktur aufgebaut wird.
 
 import math
 import random
+import signal
+import atexit
+import importlib
+from pathlib import Path
+from typing import Any, cast
 
 import arcade
 import arcade.gui
@@ -56,6 +61,7 @@ from world_generation import (
     get_lava_render_height,
     get_water_render_height,
 )
+from save_system import load_save, save_game
 
 # Choose the mob type spawned via the debug key from here instead of scrolling down.
 DEBUG_SPAWN_MOB_CLASS = Slime
@@ -64,12 +70,19 @@ DEBUG_SPAWN_MOB_CLASS = Slime
 class GameView(arcade.View):
     """Ein kleines Spiel-Fenster mit Spieler und generierter Welt."""
 
-    def __init__(self, seed: int | None = None, world_name: str = "World", save_data: dict | None = None):
+    def __init__(
+        self,
+        seed: int | None = None,
+        world_name: str = "World",
+        save_data: dict | None = None,
+        restore_runtime_state: bool = False,
+    ):
         super().__init__()
         arcade.set_background_color(BACKGROUND_COLOR)
         self.world_name = world_name or "World"
         self.start_world_seed = WORLD_SEED if seed is None else seed
         self._pending_save_data = save_data
+        self._restore_runtime_state = bool(restore_runtime_state)
         self.start_fullscreen = START_FULLSCREEN
         self.show_start_menu = False
         self.start_menu_seed_text = str(self.start_world_seed)
@@ -158,6 +171,46 @@ class GameView(arcade.View):
         self._game_over_resume_bounds: tuple[float, float, float, float] | None = None
         self._game_over_menu_bounds: tuple[float, float, float, float] | None = None
         self._runtime_initialized = False
+
+    def _build_restore_overlay_view(self, view_key: str, owner_view: arcade.View | None = None) -> arcade.View | None:
+        """Erzeugt eine Overlay-View fuer den Dev-Restore, falls moeglich."""
+        key = (view_key or "").strip()
+        if not key:
+            return None
+        if key == "game_menu":
+            return GameMenuView(self)
+        if ":" not in key:
+            return None
+
+        module_name, class_name = key.split(":", 1)
+        try:
+            module = importlib.import_module(module_name)
+            view_class = getattr(module, class_name)
+        except Exception:
+            return None
+
+        if not isinstance(view_class, type) or not issubclass(view_class, arcade.View):
+            return None
+
+        candidates: list[arcade.View] = []
+        if owner_view is not None:
+            candidates.append(owner_view)
+        candidates.append(self)
+
+        view: arcade.View | None = None
+        for owner in candidates:
+            try:
+                created = cast(Any, view_class)(owner)
+            except Exception:
+                continue
+            if isinstance(created, arcade.View):
+                view = created
+                break
+
+        if view is None:
+            return None
+
+        return view
 
     def _initialize_runtime(self):
         """Initialisiert GL-abhängige Systeme erst mit aktivem Fenster."""
@@ -1294,6 +1347,10 @@ class GameView(arcade.View):
 
         self.time_of_day = float(state_data.get("time_of_day", self.time_of_day)) % 1.0
 
+        if self._restore_runtime_state and isinstance(state_data, dict):
+            inventory_ui_open = bool(state_data.get("inventory_ui_open", False))
+            self.inventory_ui.visible = inventory_ui_open
+
         self.camera.position = self._clamped_camera_position()
         self.world.update_loaded_chunks(self.player.center_x)
         self._rebuild_world_sprites()
@@ -1837,14 +1894,140 @@ class GameView(arcade.View):
         self.inventory_ui.trigger_full_render()
 
 
-def main():
+def main(load_save_path: str | None = None, dev_autosave_name: str | None = None):
     """Startet die Spielschleife."""
     from start_menu_view import StartMenuView
 
     window = arcade.Window(SCREEN_WIDTH, SCREEN_HEIGHT, WINDOW_TITLE)
+
+    def _serialize_view_type(view: arcade.View) -> str:
+        view_type = view.__class__
+        return f"{view_type.__module__}:{view_type.__name__}"
+
+    def _resolve_game_context(current: arcade.View | None) -> tuple[GameView | None, list[str]]:
+        if current is None:
+            return None, []
+
+        overlays_top_to_bottom: list[str] = []
+        seen: set[int] = set()
+        cursor: arcade.View | None = current
+        while cursor is not None and id(cursor) not in seen:
+            seen.add(id(cursor))
+            if isinstance(cursor, GameView):
+                overlays_bottom_to_top = list(reversed(overlays_top_to_bottom))
+                return cursor, overlays_bottom_to_top
+
+            parent = getattr(cursor, "game_view", None)
+            if not isinstance(parent, arcade.View):
+                return None, []
+
+            overlays_top_to_bottom.append(_serialize_view_type(cursor))
+            cursor = parent
+
+        return None, []
+
+    def _restore_overlay_chain(game_view: GameView, overlay_chain: list[str]) -> None:
+        if window.current_view is not game_view:
+            return
+        owner_view: arcade.View = game_view
+        for raw_key in overlay_chain:
+            if not isinstance(raw_key, str):
+                continue
+            overlay_key = raw_key.strip()
+            if not overlay_key:
+                continue
+
+            overlay_view = game_view._build_restore_overlay_view(overlay_key, owner_view=owner_view)
+            if overlay_view is None:
+                continue
+
+            window.show_view(overlay_view)
+            owner_view = overlay_view
+
+    def _active_game_view() -> GameView | None:
+        game_view, _overlay_chain = _resolve_game_context(window.current_view)
+        return game_view
+
+    def _save_dev_state(reason: str) -> None:
+        if not dev_autosave_name:
+            return
+        current_view = window.current_view
+        view = _active_game_view()
+        if view is None:
+            return
+
+        _resolved_view, overlay_chain = _resolve_game_context(current_view)
+        runtime_state: dict[str, object] = {
+            "inventory_ui_open": bool(view.inventory_ui.visible),
+            "active_overlay_views": overlay_chain,
+        }
+        if overlay_chain:
+            runtime_state["active_overlay_view"] = overlay_chain[-1]
+            if overlay_chain[-1] == "game_menu_view:GameMenuView":
+                # Rueckwaertskompatibel fuer fruehere Restore-Logik.
+                runtime_state["active_view"] = "game_menu"
+        try:
+            save_path = save_game(view, save_name=dev_autosave_name, runtime_state=runtime_state)
+            print(f"[dev-save] wrote {save_path} ({reason})")
+        except Exception as exc:
+            print(f"[dev-save] failed ({reason}): {exc}")
+
+    if dev_autosave_name:
+        atexit.register(lambda: _save_dev_state("atexit"))
+
+        def _handle_shutdown(sig, _frame):
+            _save_dev_state(f"signal {sig}")
+            raise SystemExit(0)
+
+        signal.signal(signal.SIGTERM, _handle_shutdown)
+        signal.signal(signal.SIGINT, _handle_shutdown)
+
     if START_FULLSCREEN:
         window.set_fullscreen(True)
-    window.show_view(StartMenuView())
+
+    did_load = False
+    if load_save_path:
+        try:
+            is_dev_restore = bool(dev_autosave_name)
+            save_payload = load_save(Path(load_save_path))
+            world_data = save_payload.get("world", {}) if isinstance(save_payload, dict) else {}
+            meta_data = save_payload.get("meta", {}) if isinstance(save_payload, dict) else {}
+            state_data = save_payload.get("state", {}) if isinstance(save_payload, dict) else {}
+            raw_seed = world_data.get("seed", WORLD_SEED) if isinstance(world_data, dict) else WORLD_SEED
+            try:
+                seed = int(raw_seed)
+            except (TypeError, ValueError):
+                seed = int(WORLD_SEED)
+            world_name = str(meta_data.get("world_name") or "World")
+            game_view = GameView(
+                seed=seed,
+                world_name=world_name,
+                save_data=save_payload,
+                restore_runtime_state=is_dev_restore,
+            )
+            window.show_view(game_view)
+            if is_dev_restore and isinstance(state_data, dict):
+                overlay_chain: list[str] = []
+                raw_chain = state_data.get("active_overlay_views")
+                if isinstance(raw_chain, list):
+                    overlay_chain = [entry.strip() for entry in raw_chain if isinstance(entry, str) and entry.strip()]
+                if not overlay_chain:
+                    overlay_key = state_data.get("active_overlay_view")
+                    if isinstance(overlay_key, str) and overlay_key.strip():
+                        overlay_chain = [overlay_key.strip()]
+                if not overlay_chain and state_data.get("active_view") == "game_menu":
+                    # Rueckwaertskompatibel zu bestehenden Dev-Saves.
+                    overlay_chain = ["game_menu"]
+                if overlay_chain:
+                    _restore_overlay_chain(game_view, overlay_chain)
+            did_load = True
+            print(f"[dev-load] restored {load_save_path}")
+        except Exception as exc:
+            print(f"[dev-load] failed ({load_save_path}): {exc}")
+
+    if not did_load:
+        window.show_view(StartMenuView())
+
     arcade.run()
 
 

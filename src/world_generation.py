@@ -29,6 +29,9 @@ from blocks import (
     is_block_water_passable,
 )
 from resource_manager import resource_manager
+from sand import local_fall_depth as sand_local_fall_depth
+from sand import slide_decision_signature as sand_slide_decision_signature
+from sand import slide_probability as sand_slide_probability
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
 from world import World, world_to_chunk_and_local
 
@@ -45,9 +48,6 @@ UNDERGROUND_WATER_PREFERRED_HALF_SPAN = 36
 UNDERGROUND_LAVA_MAX_Y = 86
 UNDERGROUND_LAVA_MIN_Y = 6
 COASTAL_BEACH_BAND = 2
-GEN_SAND_SLIDE_CHANCE_SHALLOW = 0.10
-GEN_SAND_SLIDE_CHANCE_MEDIUM = 0.30
-GEN_SAND_SLIDE_CHANCE_STEEP = 0.50
 
 
 class WorldGenerator:
@@ -333,31 +333,27 @@ class WorldGenerator:
 
         return (ocean_mask + 0.18 * coastal_detail) > threshold
 
-    @staticmethod
-    def _slide_probability(depth_score: int) -> float:
-        """Wahrscheinlichkeit fuer diagonales Abrutschen je nach Gefaelle."""
-        if depth_score >= 3:
-            return GEN_SAND_SLIDE_CHANCE_STEEP
-        if depth_score >= 2:
-            return GEN_SAND_SLIDE_CHANCE_MEDIUM
-        return GEN_SAND_SLIDE_CHANCE_SHALLOW
-
     def _settle_generated_falling_blocks(self, chunk: "Chunk", chunk_x: int) -> None:
         """Simuliert Fallbloecke waehrend der Chunk-Generierung bis zur lokalen Ruhe."""
 
-        def local_fall_depth(local_x: int, y: int, max_probe: int = 6) -> int:
-            depth = 0
-            probe_y = y
-            while probe_y > 0 and depth < max_probe:
-                if chunk.get_block(local_x, probe_y - 1) != AIR:
-                    break
-                depth += 1
-                probe_y -= 1
-            return depth
-
         max_ticks = 32
+        slide_decisions: dict[tuple[int, int], tuple[int, int, int]] = {}
         for tick in range(max_ticks):
             moved_any = False
+
+            active_positions: set[tuple[int, int]] = set()
+            for y in range(1, chunk.height):
+                for local_x in range(chunk.width):
+                    block_id = chunk.get_block(local_x, y)
+                    if block_id != AIR and is_block_falling(block_id):
+                        active_positions.add((local_x, y))
+
+            if slide_decisions:
+                slide_decisions = {
+                    pos: signature
+                    for pos, signature in slide_decisions.items()
+                    if pos in active_positions
+                }
 
             for y in range(1, chunk.height):
                 for local_x in range(chunk.width):
@@ -370,8 +366,11 @@ class WorldGenerator:
                         chunk.set_block(local_x, y, AIR)
                         chunk.set_block(local_x, below_y, block_id)
                         moved_any = True
+                        slide_decisions.pop((local_x, y), None)
                         continue
 
+                    left_depth = -1
+                    right_depth = -1
                     candidates: list[tuple[int, int]] = []
                     for dx in (-1, 1):
                         nx = local_x + dx
@@ -381,16 +380,30 @@ class WorldGenerator:
                             continue
                         if chunk.get_block(nx, below_y) != AIR:
                             continue
-                        depth = local_fall_depth(nx, below_y)
+                        depth = sand_local_fall_depth(chunk.get_block, nx, below_y, air_block_id=AIR)
                         candidates.append((depth, dx))
+                        if dx < 0:
+                            left_depth = depth
+                        else:
+                            right_depth = depth
+
+                    decision_key = (local_x, y)
+                    decision_signature = sand_slide_decision_signature(
+                        chunk.get_block(local_x, below_y),
+                        left_depth,
+                        right_depth,
+                    )
+                    if slide_decisions.get(decision_key) == decision_signature:
+                        continue
+                    slide_decisions[decision_key] = decision_signature
 
                     if not candidates:
                         continue
 
                     best_depth = max(score for score, _dx in candidates)
-                    slide_chance = self._slide_probability(best_depth)
+                    slide_chance = sand_slide_probability(best_depth)
                     world_x = chunk_x * CHUNK_WIDTH + local_x
-                    roll = self._rand01_2d(world_x, y, salt=1733 + tick * 31)
+                    roll = self._rand01_2d(world_x, y, salt=1733)
                     if roll >= slide_chance:
                         continue
 
@@ -405,6 +418,7 @@ class WorldGenerator:
                     chunk.set_block(local_x, y, AIR)
                     chunk.set_block(target_x, below_y, block_id)
                     moved_any = True
+                    slide_decisions.pop(decision_key, None)
 
             if not moved_any:
                 break

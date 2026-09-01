@@ -77,7 +77,7 @@ def _serialize_chunk_liquid(world, attr_name: str) -> dict[str, list[list[float]
     return payload
 
 
-def build_save_payload(game_view) -> dict:
+def build_save_payload(game_view, runtime_state: dict | None = None) -> dict:
     world = game_view.world
     player = game_view.player
     inventory = player.inventory
@@ -86,7 +86,7 @@ def build_save_payload(game_view) -> dict:
     for (world_x, y), item_id in sorted(world.placed_items.items(), key=lambda entry: (entry[0][1], entry[0][0])):
         placed_items.append([int(world_x), int(y), int(item_id)])
 
-    return {
+    payload = {
         "meta": {
             "save_version": SAVE_VERSION,
             "saved_at_utc": _now_iso_utc(),
@@ -121,9 +121,16 @@ def build_save_payload(game_view) -> dict:
         },
     }
 
+    if runtime_state:
+        state = payload.get("state")
+        if isinstance(state, dict):
+            state.update(runtime_state)
 
-def save_game(game_view, save_name: str | None = None) -> Path:
-    payload = build_save_payload(game_view)
+    return payload
+
+
+def save_game(game_view, save_name: str | None = None, runtime_state: dict | None = None) -> Path:
+    payload = build_save_payload(game_view, runtime_state=runtime_state)
     base_name = _sanitize_world_name(save_name or game_view.world_name)
     target = saves_dir() / f"{base_name}{SAVE_FILE_SUFFIX}"
 

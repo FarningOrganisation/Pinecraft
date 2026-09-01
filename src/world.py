@@ -14,14 +14,14 @@ from dataclasses import dataclass, field
 from blocks import AIR, SAND, is_block_falling, is_block_solid, is_block_water_passable
 from lava import LAVA_DAMAGE, LAVA_DAMAGE_INTERVAL, LAVA_TICK_INTERVAL, LavaSystem, PLAYER_LAVA_THRESHOLD
 from liquid_interactions import LiquidInteractionSystem
+from sand import local_fall_depth as sand_local_fall_depth
+from sand import slide_decision_signature as sand_slide_decision_signature
+from sand import slide_probability as sand_slide_probability
 from settings import WORLD_SEED
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
 from water import WATER_TICK_INTERVAL, WaterSystem
 
 FALLING_BLOCK_TICK_INTERVAL = 1.0 / 14.0
-SAND_SLIDE_CHANCE_SHALLOW = 0.10
-SAND_SLIDE_CHANCE_MEDIUM = 0.30
-SAND_SLIDE_CHANCE_STEEP = 0.50
 
 
 def world_to_chunk_and_local(world_x: int) -> tuple[int, int]:
@@ -151,6 +151,7 @@ class World:
         self.water_time_accumulator = 0.0
         self.lava_time_accumulator = 0.0
         self.falling_block_time_accumulator = 0.0
+        self.falling_block_slide_decisions: dict[tuple[int, int], tuple[int, int, int]] = {}
         self.water_system = WaterSystem()
         self.lava_system = LavaSystem()
         self.liquid_interactions = LiquidInteractionSystem()
@@ -385,24 +386,7 @@ class World:
         """Lässt Fallblöcke zeitbasiert jeweils nur eine Zelle pro Tick fallen."""
         del center_x, radius_tiles
 
-        def local_fall_depth(x: int, y: int, max_probe: int = 6) -> int:
-            """Schätzt, wie weit ein Block an dieser X-Position weiter absacken kann."""
-            depth = 0
-            probe_y = y
-            while probe_y > 0 and depth < max_probe:
-                if self.get_block(x, probe_y - 1, generate_if_missing=False) != AIR:
-                    break
-                depth += 1
-                probe_y -= 1
-            return depth
-
-        def slide_probability(depth_score: int) -> float:
-            """Liefert die Abrutsch-Wahrscheinlichkeit anhand der lokalen Steilheit."""
-            if depth_score >= 3:
-                return SAND_SLIDE_CHANCE_STEEP
-            if depth_score >= 2:
-                return SAND_SLIDE_CHANCE_MEDIUM
-            return SAND_SLIDE_CHANCE_SHALLOW
+        get_block_local = lambda x, y: self.get_block(x, y, generate_if_missing=False)
 
         self.falling_block_time_accumulator += max(0.0, float(delta_time))
         if self.falling_block_time_accumulator < FALLING_BLOCK_TICK_INTERVAL:
@@ -424,6 +408,14 @@ class World:
                         world_x = chunk_x * CHUNK_WIDTH + local_x
                         falling_positions.append((world_x, y, block_id))
 
+            active_falling_positions = {(world_x, y) for world_x, y, _block_id in falling_positions}
+            if self.falling_block_slide_decisions:
+                self.falling_block_slide_decisions = {
+                    pos: signature
+                    for pos, signature in self.falling_block_slide_decisions.items()
+                    if pos in active_falling_positions
+                }
+
             # Von unten nach oben, damit Säulen konsistent blockweise fallen.
             for world_x, y, block_id in sorted(falling_positions, key=lambda item: (item[1], item[0])):
                 # Block könnte in diesem Tick schon bewegt worden sein.
@@ -440,17 +432,29 @@ class World:
                 if below_block != AIR:
                     # Bei blockiertem Untergrund seitliches Abrutschen erlauben,
                     # wenn Seite und Diagonale frei sind.
+                    left_depth = -1
+                    right_depth = -1
                     candidates: list[tuple[int, int]] = []
                     for dx in (-1, 1):
                         side_block = self.get_block(world_x + dx, y, generate_if_missing=False)
                         diag_block = self.get_block(world_x + dx, below_y, generate_if_missing=False)
                         if side_block == AIR and diag_block == AIR:
-                            depth_score = local_fall_depth(world_x + dx, below_y)
+                            depth_score = sand_local_fall_depth(get_block_local, world_x + dx, below_y, air_block_id=AIR)
                             candidates.append((depth_score, dx))
+                            if dx < 0:
+                                left_depth = depth_score
+                            else:
+                                right_depth = depth_score
+
+                    decision_signature = sand_slide_decision_signature(below_block, left_depth, right_depth)
+                    decision_key = (world_x, y)
+                    if self.falling_block_slide_decisions.get(decision_key) == decision_signature:
+                        continue
+                    self.falling_block_slide_decisions[decision_key] = decision_signature
 
                     if candidates:
                         best_depth = max(score for score, _dx in candidates)
-                        if random.random() >= slide_probability(best_depth):
+                        if random.random() >= sand_slide_probability(best_depth):
                             continue
 
                         best_dirs = [dx for score, dx in candidates if score == best_depth]
@@ -463,6 +467,7 @@ class World:
                         target_x = world_x + best_dx
                         target_y = below_y
                         found_slide_target = True
+                        self.falling_block_slide_decisions.pop(decision_key, None)
                     else:
                         found_slide_target = False
 
@@ -476,6 +481,7 @@ class World:
 
                 self.set_block(world_x, y, AIR)
                 self.set_block(target_x, target_y, block_id)
+                self.falling_block_slide_decisions.pop((world_x, y), None)
 
     def update(
         self,

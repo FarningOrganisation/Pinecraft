@@ -7,6 +7,8 @@ from blocks import AIR, get_convertible_partner_block_id
 from crafting import find_matching_recipe
 from crafting_recipes import CRAFTING_RECIPES
 from inventory import InventorySlot
+from paths import textures_dir
+from resource_manager import resource_manager
 
 
 class SlotUIWidget(arcade.gui.UIWidget):
@@ -230,6 +232,14 @@ class SlotUIWidget(arcade.gui.UIWidget):
 
             slot = self.inventory_ui.bin_slot
             if slot.item is None:
+                if self.inventory_ui.bin_icon_texture is not None:
+                    icon_rect = arcade.rect.XYWH(self.width / 2, self.height / 2 + 1, 35, 35)
+                    arcade.draw_texture_rect(
+                        self.inventory_ui.bin_icon_texture,
+                        icon_rect,
+                        alpha=180,
+                        pixelated=True,
+                    )
                 return
 
             texture = self.inventory_ui.player.inventory.get_texture(slot.item)
@@ -249,8 +259,11 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
         self.screen_height = screen_height
         self.panel_width = panel_width
         self.panel_height = panel_height
+        self.panel_background_color = (15, 15, 20, 165)
         self.slot_size = 52
         self.slot_gap = 10
+        ui_texture_dir = textures_dir("ui")
+        self.bin_icon_texture = resource_manager.load_texture(ui_texture_dir / "bin.png")
         self.crafting_slots = [InventorySlot() for _ in range(9)]
         self.conversion_input_slot = InventorySlot()
         self.bin_slot = InventorySlot()
@@ -409,7 +422,7 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
             self.add(
                 conversion_arrow_label,
                 anchor_x="left",
-                align_x=conversion_left_offset + 8,
+                align_x=conversion_left_offset + self.slot_size - 10,
                 anchor_y="top",
                 align_y=-(conversion_top_offset + 8),
             )
@@ -1028,7 +1041,7 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
             self.width,
             0,
             self.height,
-            (15, 15, 20, 210),
+            self.panel_background_color,
         )
 
         super().do_render(surface)
