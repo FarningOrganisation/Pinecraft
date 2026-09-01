@@ -9,7 +9,7 @@ import arcade
 from arcade.future.light import Light
 from arcade.gl import geometry as gl_geometry
 
-from blocks import AIR, get_block_light_opacity, is_block_skylight_surface
+from blocks import AIR, get_block_light_opacity, is_block_skylight_surface, is_block_solid
 from items import TORCH
 from lava_lighting import MAX_LAVA_LIGHT_SAMPLES, collect_lava_light_samples
 from paths import textures_dir
@@ -292,7 +292,12 @@ class LightingSystem:
             return False
 
         for y in range(tile_y + 1, min(WORLD_HEIGHT, tile_y + max_scan + 1)):
-            if self.window.world.get_block(tile_x, y, generate_if_missing=False) != AIR:
+            block_id = self.window.world.get_block(tile_x, y, generate_if_missing=False)
+            if block_id == AIR:
+                continue
+            if get_block_light_opacity(block_id) <= 0.0:
+                continue
+            if is_block_skylight_surface(block_id):
                 return False
         return True
 
@@ -301,6 +306,14 @@ class LightingSystem:
         for y in range(WORLD_HEIGHT - 1, -1, -1):
             block_id = self.window.world.get_block(tile_x, y, generate_if_missing=False)
             if get_block_light_opacity(block_id) > 0.0:
+                return y
+        return -1
+
+    def _column_top_solid_occluder_y(self, tile_x: int) -> int:
+        """Oberste solide Tile in einer Spalte; -1 falls nach oben offen."""
+        for y in range(WORLD_HEIGHT - 1, -1, -1):
+            block_id = self.window.world.get_block(tile_x, y, generate_if_missing=False)
+            if is_block_solid(block_id):
                 return y
         return -1
 
@@ -358,12 +371,12 @@ class LightingSystem:
         return max(base_blend, shaft_blend)
 
     def _player_has_open_sky(self) -> bool:
-        """True, wenn über dem Spieler in seiner Spalte kein lichtblockierender Block liegt."""
+        """True, wenn über dem Spieler in seiner Spalte kein solider Block liegt."""
         player_tile_x = int(self.window.player.center_x // TILE_SIZE)
         player_tile_y = int(self.window.player.center_y // TILE_SIZE)
         if player_tile_y < 0:
             return False
-        top_occluder_y = self._column_top_occluder_y(player_tile_x)
+        top_occluder_y = self._column_top_solid_occluder_y(player_tile_x)
         return player_tile_y > top_occluder_y
 
     def _player_depth_below_surface_tiles(self) -> float:
@@ -514,6 +527,41 @@ class LightingSystem:
         """True, wenn der aktuell ausgewählte Hotbar-Slot eine Fackel enthält."""
         return self.window._is_torch_equipped()
 
+    @staticmethod
+    def _daylight_torch_factor(day_factor: float) -> float:
+        """Basiskurve: 0 bei hellem Tag, 1 bei Dämmerung/Nacht."""
+        if day_factor >= 0.60:
+            return 0.0
+        if day_factor <= 0.25:
+            return 1.0
+        return max(0.0, 1.0 - (day_factor - 0.25) / (0.60 - 0.25))
+
+    def _sky_lit_ratio(self, tile_x: int, tile_y: int, max_scan: int = 24) -> float:
+        """Schätzt den Sky-Lit-Anteil um eine Position über lokale Samples."""
+        samples = [
+            (-5, 0),
+            (-3, 0),
+            (-2, 0),
+            (-1, 0),
+            (0, 0),
+            (1, 0),
+            (2, 0),
+            (3, 0),
+            (5, 0),
+            (-4, 1),
+            (-2, 1),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+            (2, 1),
+            (4, 1),
+        ]
+        lit_count = 0
+        for dx, dy in samples:
+            if self.is_sky_lit_air(tile_x + dx, tile_y + dy, max_scan=max_scan):
+                lit_count += 1
+        return lit_count / len(samples)
+
     def torch_daylight_multiplier(self, world_x: float, world_y: float) -> float:
         """Torch visibility fades almost to zero in bright daylight and rises again toward dusk/night."""
         if self._is_player_underground_for_daylight():
@@ -523,17 +571,13 @@ class LightingSystem:
         day_factor = self.day_factor()
         tile_x = int(world_x // TILE_SIZE)
         tile_y = int(world_y // TILE_SIZE)
-        has_sky_access = self.is_sky_lit_air(tile_x, tile_y, max_scan=24)
+        surface_y, _shadow_bonus = self._column_surface_and_shadow(tile_x)
 
-        # Bei offenem Himmel tagsüber kein Torch-Effekt.
-        if has_sky_access:
-            if day_factor >= 0.60:
-                return 0.0
-            if day_factor <= 0.25:
-                return 1.0
-            return max(0.0, 1.0 - (day_factor - 0.25) / (0.60 - 0.25))
+        # Vereinfachung: Bei Tageslicht auf/über natürlicher Oberfläche kein Torch-Effekt.
+        if day_factor >= 0.25 and (surface_y < 0 or tile_y > surface_y):
+            return 0.0
 
-        # Unterirdisch bleibt Torch-Licht konstant, unabhängig von Tageszeit.
+        # Dämmerung/Nacht sowie unterirdisch: Torch normal wirksam.
         return 1.0
 
     def _torch_shadow_positions(self) -> list[tuple[int, int]]:

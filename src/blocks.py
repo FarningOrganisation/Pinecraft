@@ -4,31 +4,33 @@ import math
 from pathlib import Path
 
 import arcade
+from ids import (
+    AIR,
+    BEDROCK,
+    CHARCOAL,
+    COAL_ORE,
+    COBBLESTONE,
+    DIAMOND,
+    DIAMOND_ORE,
+    DIRT,
+    GOLD_INGOT,
+    GOLD_ORE,
+    GRASS,
+    IRON_INGOT,
+    IRON_ORE,
+    LEAVES,
+    OAK,
+    OAK_PLANKS,
+    OBSIDIAN,
+    SAND,
+    SAPLING_OAK,
+    STONE,
+)
 from paths import textures_dir
 from resource_manager import resource_manager
 
-AIR = 0
-GRASS = 1
-DIRT = 2
-STONE = 3
-SAND = 4
-BEDROCK = 5
-OAK = 6
-LEAVES = 7
-COAL_ORE = 8
-IRON_ORE = 9
-GOLD_ORE = 10
-DIAMOND_ORE = 11
-OAK_PLANKS = 12
-COBBLESTONE = 13
-SAND = 14
-OBSIDIAN = 15
-COBBLESTONE_BG = 16
-
 BACKGROUND_BLOCK_ID_OFFSET = 200
 SOLID_BLOCK_ID_OFFSET = 400
-
-from items import CHARCOAL, DIAMOND, GOLD_INGOT, IRON_INGOT
 
 BLOCKS = {
     GRASS: {"name": "Grass", "texture": "grass.png", "solid": True, "drop_id": DIRT, "falling": False},
@@ -44,6 +46,8 @@ BLOCKS = {
         "light_opacity": 0.18,
         "skylight_surface": False,
         "falling": False,
+        "drop_id": SAPLING_OAK,
+        "drop_chance": 0.10,
     },
     COAL_ORE: {"name": "Coal Ore", "texture": "coal_ore.png", "solid": True, "hardness": 2.2, "drop_id": CHARCOAL, "falling": False},
     IRON_ORE: {"name": "Iron Ore", "texture": "iron_ore.png", "solid": True, "hardness": 2.4, "drop_id": IRON_INGOT, "falling": False},
@@ -52,15 +56,9 @@ BLOCKS = {
     OAK_PLANKS: {"name": "Oak Planks", "texture": "planks_oak.png", "solid": True, "falling": False},
     COBBLESTONE: {"name": "Cobblestone", "texture": "cobblestone.png", "solid": True, "hardness": 2.0, "falling": False},
     OBSIDIAN: {"name": "Obsidian", "texture": "obsidian.png", "solid": True, "hardness": 10},
-    COBBLESTONE_BG: {"name": "Cobblestone Background", "texture": "background/cobblestone.png", "solid": False}
 }
 
 EXCLUDED_BACKGROUND_CONVERSION_BLOCKS = {AIR, BEDROCK}
-
-# Direkte Spezialzuordnungen behalten bestehende IDs stabil.
-_EXPLICIT_NORMAL_TO_BACKGROUND = {
-    COBBLESTONE: COBBLESTONE_BG,
-}
 
 NORMAL_TO_BACKGROUND_BLOCK: dict[int, int] = {}
 BACKGROUND_TO_NORMAL_BLOCK: dict[int, int] = {}
@@ -77,11 +75,6 @@ def _unique_block_id(preferred_id: int) -> int:
 def _build_background_conversion_tables() -> None:
     """Erzeugt 1:1-Konvertierung für normale und Hintergrundblöcke."""
     block_texture_dir = textures_dir("blocks")
-
-    for normal_id, background_id in _EXPLICIT_NORMAL_TO_BACKGROUND.items():
-        if normal_id in BLOCKS and background_id in BLOCKS:
-            NORMAL_TO_BACKGROUND_BLOCK[normal_id] = background_id
-            BACKGROUND_TO_NORMAL_BLOCK[background_id] = normal_id
 
     # list(...) damit neu angelegte Varianten den Loop nicht beeinflussen.
     for block_id, info in list(BLOCKS.items()):
@@ -164,6 +157,19 @@ def get_block_drop_id(block_id: int) -> int | None:
     if block_definition is None:
         return None
     return block_definition.get("drop_id", block_id)
+
+
+def get_block_drop_chance(block_id: int) -> float:
+    """Liefert die Drop-Chance eines Blocks im Bereich [0.0, 1.0]."""
+    block_definition = BLOCKS.get(block_id)
+    if block_definition is None:
+        return 0.0
+    chance = block_definition.get("drop_chance", 1.0)
+    try:
+        chance_value = float(chance)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(0.0, min(1.0, chance_value))
 
 
 def get_block_hardness(block_id: int) -> float:

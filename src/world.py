@@ -11,7 +11,8 @@ import math
 import random
 from dataclasses import dataclass, field
 
-from blocks import AIR, SAND, is_block_falling, is_block_solid, is_block_water_passable
+from blocks import is_block_falling, is_block_solid, is_block_water_passable
+from ids import AIR, DIRT, GRASS, LEAVES, OAK, SAND, SAPLING_OAK
 from lava import LAVA_DAMAGE, LAVA_DAMAGE_INTERVAL, LAVA_TICK_INTERVAL, LavaSystem, PLAYER_LAVA_THRESHOLD
 from liquid_interactions import LiquidInteractionSystem
 from sand import local_fall_depth as sand_local_fall_depth
@@ -19,9 +20,12 @@ from sand import slide_decision_signature as sand_slide_decision_signature
 from sand import slide_probability as sand_slide_probability
 from settings import WORLD_SEED
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
+from tree import build_oak_tree_layout, oak_trunk_height
 from water import WATER_TICK_INTERVAL, WaterSystem
 
 FALLING_BLOCK_TICK_INTERVAL = 1.0 / 14.0
+SAPLING_GROWTH_DELAY_SECONDS = 90.0
+SAPLING_GROWTH_TICK_INTERVAL = 0.5
 
 
 def world_to_chunk_and_local(world_x: int) -> tuple[int, int]:
@@ -152,6 +156,8 @@ class World:
         self.lava_time_accumulator = 0.0
         self.falling_block_time_accumulator = 0.0
         self.falling_block_slide_decisions: dict[tuple[int, int], tuple[int, int, int]] = {}
+        self.sapling_growth_time_accumulator = 0.0
+        self.sapling_growth_timers: dict[tuple[int, int], float] = {}
         self.water_system = WaterSystem()
         self.lava_system = LavaSystem()
         self.liquid_interactions = LiquidInteractionSystem()
@@ -517,6 +523,123 @@ class World:
             self.liquid_interactions.resolve_contacts(self, contacts)
 
         self._update_player_lava_damage(player, delta_time)
+        self._update_saplings(delta_time)
+
+    def initialize_placed_item_runtime_state(self) -> None:
+        """Stellt Runtime-Daten für platzierte Items (z. B. Sapling-Timer) wieder her."""
+        self.sapling_growth_timers = {
+            (tile_x, tile_y): 0.0
+            for (tile_x, tile_y), item_id in self.placed_items.items()
+            if item_id == SAPLING_OAK
+        }
+        self.sapling_growth_time_accumulator = 0.0
+
+    def has_surface_exposure(self, tile_x: int, tile_y: int) -> bool:
+        """True, wenn der Sapling nicht unterirdisch liegt und lokal freie Höhe hat."""
+        surface_y = self.get_surface_height(tile_x)
+        if tile_y <= surface_y:
+            # Unterhalb/auf natürlicher Oberfläche gilt als unterirdisch für Baumwachstum.
+            return False
+
+        # Nur lokal scannen statt bis WORLD_HEIGHT, um unnötige Kosten zu vermeiden.
+        max_scan_y = min(WORLD_HEIGHT, max(surface_y + 2, tile_y + 16))
+        for scan_y in range(tile_y + 1, max_scan_y):
+            if self.get_block(tile_x, scan_y, generate_if_missing=False) != AIR:
+                return False
+            if self.get_water(tile_x, scan_y) > 0.0:
+                return False
+            if self.get_lava(tile_x, scan_y) > 0.0:
+                return False
+        return True
+
+    def _can_grow_sapling(self, tile_x: int, tile_y: int) -> bool:
+        if self.get_placed_item(tile_x, tile_y) != SAPLING_OAK:
+            return False
+        if tile_y <= 0:
+            return False
+        if self.get_block(tile_x, tile_y, generate_if_missing=False) != AIR:
+            return False
+
+        below_block = self.get_block(tile_x, tile_y - 1, generate_if_missing=False)
+        if below_block not in (DIRT, GRASS):
+            return False
+
+        return self.has_surface_exposure(tile_x, tile_y)
+
+    def _grow_oak_tree_from_sapling(self, tile_x: int, tile_y: int) -> bool:
+        trunk_height = oak_trunk_height(self.seed, tile_x)
+        trunk_positions, leaf_positions, _trunk_top = build_oak_tree_layout(
+            tile_x,
+            tile_y,
+            trunk_height,
+            WORLD_HEIGHT,
+        )
+
+        for check_x, check_y in trunk_positions:
+            if check_y < 0 or check_y >= WORLD_HEIGHT:
+                return False
+            current_block = self.get_block(check_x, check_y, generate_if_missing=False)
+            if current_block != AIR:
+                return False
+            existing_item = self.get_placed_item(check_x, check_y)
+            if existing_item is not None and (check_x, check_y) != (tile_x, tile_y):
+                return False
+
+        for check_x, check_y in leaf_positions:
+            if check_y < 0 or check_y >= WORLD_HEIGHT:
+                continue
+            if (check_x, check_y) in trunk_positions:
+                continue
+            existing_item = self.get_placed_item(check_x, check_y)
+            if existing_item is not None:
+                return False
+            current_block = self.get_block(check_x, check_y, generate_if_missing=False)
+            if current_block not in (AIR, LEAVES):
+                return False
+
+        self.remove_placed_item(tile_x, tile_y)
+
+        for place_x, place_y in trunk_positions:
+            self.set_block(place_x, place_y, OAK)
+        for place_x, place_y in leaf_positions:
+            if place_y < 0 or place_y >= WORLD_HEIGHT:
+                continue
+            if (place_x, place_y) in trunk_positions:
+                continue
+            if self.get_block(place_x, place_y, generate_if_missing=False) == AIR:
+                self.set_block(place_x, place_y, LEAVES)
+
+        return True
+
+    def _update_saplings(self, delta_time: float) -> None:
+        if not self.sapling_growth_timers:
+            return
+
+        self.sapling_growth_time_accumulator += max(0.0, float(delta_time))
+        while self.sapling_growth_time_accumulator >= SAPLING_GROWTH_TICK_INTERVAL:
+            self.sapling_growth_time_accumulator -= SAPLING_GROWTH_TICK_INTERVAL
+
+            grown_positions: list[tuple[int, int]] = []
+            for (tile_x, tile_y), elapsed in list(self.sapling_growth_timers.items()):
+                if self.get_placed_item(tile_x, tile_y) != SAPLING_OAK:
+                    self.sapling_growth_timers.pop((tile_x, tile_y), None)
+                    continue
+
+                chunk_x, _ = world_to_chunk_and_local(tile_x)
+                if chunk_x not in self.chunks:
+                    continue
+
+                elapsed += SAPLING_GROWTH_TICK_INTERVAL
+                self.sapling_growth_timers[(tile_x, tile_y)] = elapsed
+                if elapsed < SAPLING_GROWTH_DELAY_SECONDS:
+                    continue
+                if not self._can_grow_sapling(tile_x, tile_y):
+                    continue
+                if self._grow_oak_tree_from_sapling(tile_x, tile_y):
+                    grown_positions.append((tile_x, tile_y))
+
+            for position in grown_positions:
+                self.sapling_growth_timers.pop(position, None)
 
     def get_loaded_chunk_count(self) -> int:
         """Gibt die Anzahl der aktuell geladenen Chunks zurück."""
@@ -749,6 +872,10 @@ class World:
             return False
 
         self.placed_items[key] = item_id
+        if item_id == SAPLING_OAK:
+            self.sapling_growth_timers[key] = 0.0
+        else:
+            self.sapling_growth_timers.pop(key, None)
         self.changed_placed_items.append((world_x, y, None, item_id))
         return True
 
@@ -758,6 +885,7 @@ class World:
         old_item = self.placed_items.pop(key, None)
         if old_item is None:
             return None
+        self.sapling_growth_timers.pop(key, None)
         self.changed_placed_items.append((world_x, y, old_item, None))
         return old_item
 

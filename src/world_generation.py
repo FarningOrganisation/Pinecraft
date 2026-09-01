@@ -33,6 +33,7 @@ from sand import local_fall_depth as sand_local_fall_depth
 from sand import slide_decision_signature as sand_slide_decision_signature
 from sand import slide_probability as sand_slide_probability
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
+from tree import build_oak_tree_layout, oak_trunk_height
 from world import World, world_to_chunk_and_local
 
 WATER_TEXTURE = resource_manager.load_texture_in_textures(Path("blocks") / "water.png")
@@ -307,11 +308,6 @@ class WorldGenerator:
             return False
         return self._rand01(world_x, salt=401) < min(1.0, tree_density)
 
-    def _tree_height(self, world_x: int) -> int:
-        """Deterministische Stammhöhe zwischen 4 und 6."""
-        value = (world_x * 83492791 + self.seed * 2971215073) & 0xFFFFFFFF
-        return 4 + (value % 3)
-
     def _is_ocean_column(self, world_x: int, surface_y: int) -> bool:
         """Deterministisch zusammenhängende Ozeanspalten unterhalb des Meeresspiegels."""
         if surface_y >= SEA_LEVEL:
@@ -568,11 +564,15 @@ class WorldGenerator:
                 continue
 
             trunk_base_y = height + 1
-            trunk_height = self._tree_height(world_x)
-            trunk_top = min(WORLD_HEIGHT - 1, trunk_base_y + trunk_height - 1)
-
-            for tree_y in range(trunk_base_y, trunk_top + 1):
-                place_generated(world_x, tree_y, OAK)
+            trunk_height = oak_trunk_height(self.seed, world_x)
+            trunk_positions, leaf_positions, trunk_top = build_oak_tree_layout(
+                world_x,
+                trunk_base_y,
+                trunk_height,
+                WORLD_HEIGHT,
+            )
+            for tree_x, tree_y in trunk_positions:
+                place_generated(tree_x, tree_y, OAK)
 
             leaves_center_y = trunk_top
             crown_radius_x = 2
@@ -580,17 +580,9 @@ class WorldGenerator:
             crown_up = 1
             stretch_top = self._rand01(world_x, salt=73) > 0.78
 
-            # Garantierte Kern-Krone, damit kein kahler Baum entsteht.
-            core_offsets = [
-                (0, 0),
-                (0, 1),
-                (0, -1),
-                (1, 0),
-                (-1, 0),
-            ]
-            for dx, dy in core_offsets:
-                ly = leaves_center_y + dy
-                place_generated(world_x + dx, ly, LEAVES, replace_air_only=True)
+            # Basisform aus shared tree-Layout.
+            for leaf_x, leaf_y in leaf_positions:
+                place_generated(leaf_x, leaf_y, LEAVES, replace_air_only=True)
 
             # Erweiterte Krone mit deterministischem Zufall für organischere Formen.
             for dx in range(-crown_radius_x, crown_radius_x + 1):

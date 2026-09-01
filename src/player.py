@@ -6,20 +6,21 @@ gezeichnet wird.
 """
 
 import math
+import random
 
 import arcade
 
 from animated_sprite import AnimatedSprite
 from resource_manager import resource_manager
 from blocks import (
-    AIR, DIRT, GRASS, OAK, STONE, SAND,
+    get_block_drop_chance,
     get_block_drop_id, 
     get_block_hardness, 
     is_background_block,
     is_block_breakable, 
     is_block_solid
 )
-from items import STONE_PICKAXE, STONE_SWORD, TORCH
+from ids import AIR, DIRT, GRASS, OAK, SAND, STONE, STONE_PICKAXE, STONE_SWORD, TORCH
 from inventory import Inventory
 from settings import (
     GROUND_Y,
@@ -580,9 +581,25 @@ class Player(AnimatedSprite):
             return False
 
         target_kind, target_id = place_target
+        placement_rules = self.inventory.get_placement_rules(target_id) if target_kind == "item" else {}
         allow_background_support = target_kind == "block" and is_background_block(target_id)
 
         has_support = False
+        if target_kind == "item":
+            raw_allowed_support = placement_rules.get("allowed_support_blocks") if isinstance(placement_rules, dict) else None
+            if isinstance(raw_allowed_support, (list, tuple, set)):
+                if tile_y <= 0:
+                    return False
+                allowed_support_blocks = {
+                    int(block_id)
+                    for block_id in raw_allowed_support
+                    if isinstance(block_id, (int, float))
+                }
+                below_block = world.get_block(tile_x, tile_y - 1)
+                if below_block not in allowed_support_blocks:
+                    return False
+                has_support = True
+
         for ny, nx in ((-1, 0), (1, 0), (0, 1), (0, -1)):
             support_x = tile_x - nx
             support_y = tile_y - ny
@@ -596,7 +613,7 @@ class Player(AnimatedSprite):
                 break
 
         if not has_support:
-            return
+            return False
 
         block_center_x, block_center_y = world.to_world_position(tile_x, tile_y)
         block_left = block_center_x - TILE_SIZE / 2
@@ -896,28 +913,18 @@ class Player(AnimatedSprite):
             return None
 
         world.break_block(tile_x, tile_y)
-        self._maybe_spawn_tree_seed_drop(block_id, tile_x, tile_y)
         drop_id = get_block_drop_id(block_id)
-        if drop_id is None:
-            drop_id = block_id
+        drop_chance = get_block_drop_chance(block_id)
         chunk_x, _ = world_to_chunk_and_local(tile_x)
         self.dirty_chunk_xs.add(chunk_x)
-        self.pending_item_drops.append((drop_id, tile_x, tile_y))
+        if drop_id is not None and random.random() < drop_chance:
+            self.pending_item_drops.append((drop_id, tile_x, tile_y))
         self.mining_target = None
         self.mining_finished = False
         self.is_mining = False
         self.mining_animation.reset()
         self.world_dirty = True
         return block_id
-
-    def _maybe_spawn_tree_seed_drop(self, mined_block_id: int, tile_x: int, tile_y: int):
-        """Optionaler Zusatz-Drop bei Baumblöcken (Challenge-Stelle)."""
-        # TODO_STUDENT (⭐⭐):
-        # - Neues Item "Tree Seed" in items.py anlegen
-        # - Seltene Chance prüfen (z. B. 5 %)
-        # - Bei Treffer in self.pending_item_drops aufnehmen
-        if mined_block_id == OAK:
-            return
 
     def consume_pending_item_drops(self) -> list[tuple[int, int, int]]:
         """Liefert und leert alle wartenden Drop-Spawn-Events."""

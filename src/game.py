@@ -312,7 +312,7 @@ class GameView(arcade.View):
         return torch_tiles
 
     def _draw_placed_world_items(self):
-        """Zeichnet platzierte Items (z. B. Fackeln) zentriert in Blockzellen."""
+        """Zeichnet platzierte Items (z. B. Fackeln) mit Bodenkontakt in Blockzellen."""
         min_tile_x, max_tile_x = self._get_visible_tile_x_range(margin_tiles=2)
         min_tile_y, max_tile_y = self._get_visible_tile_range(margin_tiles=2)
         draw_size = TILE_SIZE * 0.82
@@ -328,7 +328,8 @@ class GameView(arcade.View):
                 continue
 
             center_x = (tile_x + 0.5) * TILE_SIZE
-            center_y = (tile_y + 0.5) * TILE_SIZE
+            block_bottom = tile_y * TILE_SIZE
+            center_y = block_bottom + draw_size * 0.5
             rect = arcade.rect.XYWH(center_x, center_y, draw_size, draw_size)
             arcade.draw_texture_rect(texture, rect, alpha=255)
 
@@ -1314,6 +1315,7 @@ class GameView(arcade.View):
             item_id = int(entry[2])
             placed_items[(world_x, tile_y)] = item_id
         self.world.placed_items = placed_items
+        self.world.initialize_placed_item_runtime_state()
 
         spawn_data = world_data.get("spawn_point", {}) if isinstance(world_data, dict) else {}
         spawn_x = spawn_data.get("x") if isinstance(spawn_data, dict) else None

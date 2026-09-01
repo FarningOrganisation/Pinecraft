@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from blocks import AIR, BLOCK_TEXTURES, BLOCKS
-from items import ITEM_ID_START, ITEMS, ITEM_TEXTURES, TORCH, is_item_id
+from blocks import BLOCK_TEXTURES, BLOCKS
+from ids import AIR, ITEM_ID_START
+from items import ITEMS, ITEM_TEXTURES, is_item_id
 
 
 @dataclass
@@ -68,9 +69,24 @@ class Inventory:
             return None
         if Inventory.is_block_id(entry_id):
             return "block", entry_id
-        if entry_id == TORCH:
-            return "item", entry_id
+        if Inventory.is_item_id(entry_id):
+            item_definition = ITEMS.get(entry_id) or {}
+            if item_definition.get("place_as") == "item":
+                return "item", entry_id
         return None
+
+    @staticmethod
+    def get_placement_rules(entry_id) -> dict:
+        """Liefert optionale Platzierungsregeln für ein Item."""
+        if not Inventory.is_item_id(entry_id):
+            return {}
+        item_definition = ITEMS.get(entry_id)
+        if item_definition is None:
+            return {}
+        rules = item_definition.get("placement_rules")
+        if not isinstance(rules, dict):
+            return {}
+        return rules
 
     @staticmethod
     def is_placeable(entry_id):

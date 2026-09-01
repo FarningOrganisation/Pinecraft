@@ -3,22 +3,24 @@
 from pathlib import Path
 
 import arcade
+from ids import (
+    DIRT,
+    GRASS,
+    CHARCOAL,
+    DIAMOND,
+    GOLD_INGOT,
+    HAMMER,
+    IRON_INGOT,
+    IRON_PICKAXE,
+    ITEM_ID_START,
+    SAPLING_OAK,
+    STICK,
+    STONE_PICKAXE,
+    STONE_SWORD,
+    TORCH,
+)
 from paths import textures_dir
 from resource_manager import resource_manager
-
-ITEM_ID_START = 1024
-
-
-STONE_PICKAXE = ITEM_ID_START
-CHARCOAL = ITEM_ID_START + 1
-IRON_INGOT = ITEM_ID_START + 2
-GOLD_INGOT = ITEM_ID_START + 3
-DIAMOND = ITEM_ID_START + 4
-STICK = ITEM_ID_START + 5
-TORCH = ITEM_ID_START + 6
-STONE_SWORD = ITEM_ID_START + 7
-IRON_PICKAXE = ITEM_ID_START + 8
-HAMMER = ITEM_ID_START +9
 ITEMS = {
     STONE_PICKAXE: {
         "item_id": STONE_PICKAXE,
@@ -95,6 +97,20 @@ ITEMS = {
         "item_type": "light",
         "max_stack": 64,
         "texture_dir": "blocks",
+        "place_as": "item",
+    },
+    SAPLING_OAK: {
+        "item_id": SAPLING_OAK,
+        "name": "Oak Sapling",
+        "texture": "sapling_oak.png",
+        "item_type": "nature",
+        "max_stack": 64,
+        "texture_dir": "blocks",
+        "place_as": "item",
+        "placement_rules": {
+            "allowed_support_blocks": [GRASS, DIRT],
+            "requires_surface_exposure_for_growth": True,
+        },
     },
 }
 
