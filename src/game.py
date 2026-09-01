@@ -145,6 +145,10 @@ class GameView(arcade.View):
         self.break_range = 3.5 * TILE_SIZE
         self.item_pull_radius = 4.5 * TILE_SIZE
         self.item_pickup_radius = 0.95 * TILE_SIZE
+        self.item_throw_speed = 280.0
+        self.item_throw_upward_speed = 55.0
+        self.item_throw_spawn_distance = TILE_SIZE * 1.45
+        self.item_throw_pickup_delay = 0.9
         self.day_length_seconds = 24.0 * 60.0
         self.time_of_day = 0.50
         self.sun_radius = 34
@@ -692,6 +696,46 @@ class GameView(arcade.View):
         self.dropped_items.append(drop)
         self.dropped_item_sprite_list.append(drop.sprite)
 
+    def _throw_selected_hotbar_item(self) -> bool:
+        """Wirft ein Item aus dem aktiven Hotbar-Slot vor den Spieler."""
+        slot_index = self.player.inventory.HOTBAR_START + self.player.selected_hotbar_slot
+        slot = self.player.inventory.get_slot(slot_index)
+        if slot is None or slot.item is None or slot.count <= 0:
+            return False
+
+        entry_id = int(slot.item)
+        texture = self.player.inventory.get_texture(entry_id)
+        if texture is None:
+            return False
+
+        direction = 1.0 if self.player.facing_right else -1.0
+        spawn_x = self.player.center_x + direction * self.item_throw_spawn_distance
+        spawn_y = self.player.center_y + self.player.height * 0.1
+
+        drop = DroppedItem(
+            entry_id=entry_id,
+            texture=texture,
+            spawn_x=spawn_x,
+            spawn_y=spawn_y,
+            initial_vx=direction * self.item_throw_speed,
+            initial_vy=self.item_throw_upward_speed,
+            pickup_delay_seconds=self.item_throw_pickup_delay,
+        )
+        self.dropped_items.append(drop)
+        self.dropped_item_sprite_list.append(drop.sprite)
+
+        slot.count -= 1
+        if slot.count <= 0:
+            slot.item = None
+            slot.count = 0
+
+        self.hotbar.trigger_render()
+        self.health_ui.trigger_render()
+        self.bubble_ui.trigger_render()
+        if self.inventory_ui.visible:
+            self.inventory_ui.trigger_render()
+        return True
+
     def _update_dropped_items(self, delta_time: float, allow_pickup: bool = True):
         """Aktualisiert Drop-Physik und sammelt optional erreichbare Items auf."""
         if not self.dropped_items:
@@ -730,6 +774,15 @@ class GameView(arcade.View):
         min_camera_y = self.height / 2
         camera_y = max(self.player.center_y, min_camera_y)
         return self.player.center_x, camera_y
+
+    def _active_drop_chunk_xs(self) -> set[int]:
+        """Ermittelt Chunks, die gedroppte Items enthalten, damit sie geladen bleiben."""
+        chunk_xs: set[int] = set()
+        for drop in self.dropped_items:
+            tile_x = int(math.floor(drop.sprite.center_x / TILE_SIZE))
+            chunk_x, _ = world_to_chunk_and_local(tile_x)
+            chunk_xs.add(chunk_x)
+        return chunk_xs
 
     def _rebuild_world_sprites(self):
         """Erzeugt den Block- und Wasser-Sprite-Cache für den aktuellen Sichtbereich neu."""
@@ -888,8 +941,8 @@ class GameView(arcade.View):
             target_height = get_water_render_height(normalized)
             if target_height <= 0.0 and normalized > 0.0:
                 above = self.world.get_water(tile_x, tile_y + 1)
-                below = self.world.get_water(tile_x, tile_y - 1)
-                if above >= WATER_RENDER_THRESHOLD or below >= WATER_RENDER_THRESHOLD:
+                # Nur von oben haengende Restmengen als duennen Slice zeichnen.
+                if above >= WATER_RENDER_THRESHOLD:
                     target_height = TILE_SIZE / WATER_VISUAL_STEPS
             should_render = in_visible_band and block_open_for_water and target_height > 0.0
 
@@ -1266,7 +1319,24 @@ class GameView(arcade.View):
     def on_update(self, delta_time: float):
         """Wird regelmäßig pro Frame aufgerufen."""
         if self.game_over:
-            self._update_dropped_items(delta_time, allow_pickup=False)
+            physics_delta = min(delta_time, 1 / 30)
+            self.world.update(
+                physics_delta,
+                center_x=self.player.center_x,
+                center_y=self.player.center_y,
+                player=None,
+                update_chunks=False,
+            )
+
+            water_changes = self.world.consume_changed_water()
+            if water_changes:
+                self._apply_world_water_diffs(water_changes)
+
+            lava_changes = self.world.consume_changed_lava()
+            if lava_changes:
+                self._apply_world_lava_diffs(lava_changes)
+
+            self._update_dropped_items(physics_delta, allow_pickup=False)
             return
 
         self.frame_count += 1
@@ -1376,6 +1446,7 @@ class GameView(arcade.View):
             self.player.center_x,
             max_loads=self.max_chunk_loads_per_frame,
             max_unloads=self.max_chunk_unloads_per_frame,
+            keep_loaded_chunk_xs=self._active_drop_chunk_xs(),
         )
 
         # Reconcile cache keys with actual loaded chunk keys to avoid missing visuals.
@@ -1650,10 +1721,8 @@ class GameView(arcade.View):
             self.left_pressed = False
             self.player.move_right()
         elif symbol == arcade.key.Q:
-            if self.mouse_screen_x is not None and self.mouse_screen_y is not None:
-                placed = self._place_water_at_mouse_cursor()
-                if placed is not None:
-                    return
+            if self._throw_selected_hotbar_item():
+                return
         elif symbol == arcade.key.SPACE or symbol == arcade.key.UP or symbol == arcade.key.W:
             self.jump_pressed = True
             if self.player.in_water or self.player.feet_in_water:

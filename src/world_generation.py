@@ -563,8 +563,10 @@ class WorldGenerator:
         world_x: float,
         max_loads: int | None = None,
         max_unloads: int | None = None,
+        keep_loaded_chunk_xs: set[int] | None = None,
     ):
         """Lädt/entlädt Chunks optional budgetiert und liefert (neu, entladen) zurück."""
+        protected_chunks = keep_loaded_chunk_xs or set()
         current_chunk_x = int(world_x // TILE_SIZE) // CHUNK_WIDTH
         min_chunk_x = current_chunk_x - world.load_radius
         max_chunk_x = current_chunk_x + world.load_radius
@@ -573,6 +575,8 @@ class WorldGenerator:
 
         unload_candidates: list[int] = []
         for chunk_x in world.chunks:
+            if chunk_x in protected_chunks:
+                continue
             if (chunk_x < min_chunk_x or chunk_x > max_chunk_x) and abs(chunk_x - current_chunk_x) > world.unload_radius:
                 unload_candidates.append(chunk_x)
 

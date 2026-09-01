@@ -230,9 +230,16 @@ class World:
         world_x: float,
         max_loads: int | None = None,
         max_unloads: int | None = None,
+        keep_loaded_chunk_xs: set[int] | None = None,
     ):
         """Lädt Chunks im Radius, optional mit Budget pro Aufruf."""
-        return self.generator.update_loaded_chunks(self, world_x, max_loads=max_loads, max_unloads=max_unloads)
+        return self.generator.update_loaded_chunks(
+            self,
+            world_x,
+            max_loads=max_loads,
+            max_unloads=max_unloads,
+            keep_loaded_chunk_xs=keep_loaded_chunk_xs,
+        )
 
     def iter_blocks(
         self,

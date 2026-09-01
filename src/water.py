@@ -8,6 +8,7 @@ from liquids import LiquidConfig, LiquidSystem
 MAX_WATER = 1.0
 MIN_WATER = 0.001
 MIN_FLOW = 0.01
+MIN_HORIZONTAL_FLOW = 0.001
 DAMPED_HORIZONTAL_FLOW_FACTOR = 0.25
 WATER_TICK_RATE = 15
 WATER_TICK_INTERVAL = 1.0 / WATER_TICK_RATE
@@ -18,6 +19,8 @@ WATER_CONFIG = LiquidConfig(
     max_liquid=MAX_WATER,
     min_liquid=MIN_WATER,
     min_flow=MIN_FLOW,
+    horizontal_min_flow=MIN_HORIZONTAL_FLOW,
+    horizontal_balance_epsilon=1e-6,
     horizontal_flow_factor=DAMPED_HORIZONTAL_FLOW_FACTOR,
     tick_rate=WATER_TICK_RATE,
     max_updates_per_tick=MAX_WATER_UPDATES_PER_TICK,

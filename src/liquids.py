@@ -19,6 +19,8 @@ class LiquidConfig:
     max_liquid: float = 1.0
     min_liquid: float = 0.001
     min_flow: float = 0.01
+    horizontal_min_flow: float | None = None
+    horizontal_balance_epsilon: float = 1e-6
     horizontal_flow_factor: float = 0.25
     tick_rate: int = 15
     max_updates_per_tick: int = 500
@@ -45,6 +47,10 @@ class LiquidSystem:
         self.max_water = config.max_liquid
         self.min_water = config.min_liquid
         self.min_flow = config.min_flow
+        self.horizontal_min_flow = (
+            config.horizontal_min_flow if config.horizontal_min_flow is not None else config.min_flow
+        )
+        self.horizontal_balance_epsilon = max(0.0, float(config.horizontal_balance_epsilon))
         self.horizontal_flow_factor = config.horizontal_flow_factor
         self.max_updates_per_tick = config.max_updates_per_tick
         self.debug_profile = config.debug_profile
@@ -161,7 +167,15 @@ class LiquidSystem:
     def _compute_horizontal_flow(self, left_amount: float, right_amount: float) -> float:
         """Returns signed damped flow from left to right (negative means right to left)."""
         difference = left_amount - right_amount
-        if abs(difference) < self.min_flow:
+        abs_difference = abs(difference)
+        if abs_difference <= self.horizontal_balance_epsilon:
+            return 0.0
+
+        # Mikro-Ausgleich: kleine Pegeldifferenzen sofort halbieren,
+        # damit keine stairstep-Reste als "stabil" stehen bleiben.
+        if abs_difference < self.horizontal_min_flow:
+            if left_amount > self.min_water and right_amount > self.min_water:
+                return difference * 0.5
             return 0.0
 
         if difference > 0.0:
@@ -237,7 +251,9 @@ class LiquidSystem:
             if below_amount >= self.max_water:
                 continue
             flow = min(amount, self.max_water - below_amount)
-            if flow > self.min_flow:
+            # Vertikale Gravitation muss auch kleinste Restmengen abbauen,
+            # sonst koennen Sub-Min-Flow-Scheiben in der Luft stecken bleiben.
+            if flow > 1e-12:
                 next_state[cell] = amount - flow
                 next_state[below] = below_amount + flow
                 moved_cells.add(cell)
