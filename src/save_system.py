@@ -94,6 +94,10 @@ def build_save_payload(game_view) -> dict:
         },
         "world": {
             "seed": int(world.seed),
+            "spawn_point": {
+                "x": float(world.spawn_x if world.spawn_x is not None else player.center_x),
+                "y": float(world.spawn_y if world.spawn_y is not None else player.center_y),
+            },
             "changed_blocks": _serialize_chunk_blocks(world),
             "changed_water": _serialize_chunk_liquid(world, "water"),
             "changed_lava": _serialize_chunk_liquid(world, "lava"),

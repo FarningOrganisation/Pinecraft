@@ -11,12 +11,16 @@ from settings import TILE_SIZE
 class DroppedItem:
     """Kleine Welt-Entity für einen einzelnes gedropptes Item."""
 
+    DESPAWN_SECONDS = 300.0
+
     def __init__(self, entry_id: int, texture, spawn_x: float, spawn_y: float):
         self.entry_id = entry_id
         self.sprite = self._build_sprite(texture, spawn_x, spawn_y)
 
         self.vx = random.uniform(-80.0, 80.0)
         self.vy = random.uniform(80.0, 160.0)
+        self.age_seconds = 0.0
+        self.expired = False
 
     @staticmethod
     def _build_sprite(texture, spawn_x: float, spawn_y: float):
@@ -53,6 +57,11 @@ class DroppedItem:
 
     def update(self, world, player, delta_time: float, gravity: float, pull_radius: float, pickup_radius: float) -> bool:
         """Aktualisiert Bewegung; True bedeutet: aufgesammelt und entfernen."""
+        self.age_seconds += float(delta_time)
+        if self.age_seconds >= self.DESPAWN_SECONDS:
+            self.expired = True
+            return False
+
         dx = player.center_x - self.sprite.center_x
         dy = player.center_y - self.sprite.center_y
         dist = math.hypot(dx, dy)

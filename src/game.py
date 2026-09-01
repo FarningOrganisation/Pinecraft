@@ -151,6 +151,8 @@ class GameView(arcade.View):
         self.moon_radius = 26
         self.celestial_size_px = 35
         self.game_over = False
+        self._game_over_resume_bounds: tuple[float, float, float, float] | None = None
+        self._game_over_menu_bounds: tuple[float, float, float, float] | None = None
         self._runtime_initialized = False
 
     def _initialize_runtime(self):
@@ -274,7 +276,7 @@ class GameView(arcade.View):
             arcade.draw_texture_rect(texture, rect, alpha=255)
 
     def _draw_game_over_overlay(self):
-        """Zeichnet einen einfachen Game-Over-Bildschirm über der Szene."""
+        """Zeichnet einen Game-Over-Bildschirm mit Resume/Menu-Buttons."""
         arcade.draw_rect_filled(
             arcade.rect.XYWH(
                 self.width / 2,
@@ -286,22 +288,140 @@ class GameView(arcade.View):
         arcade.draw_text(
             "GAME OVER",
             self.width / 2,
-            self.height / 2 + 28,
+            self.height / 2 + 84,
             arcade.color.WHITE,
             font_size=34,
             anchor_x="center",
             anchor_y="center",
             bold=True,
         )
+
         arcade.draw_text(
-            "Press Enter to restart",
+            "You dropped your inventory",
             self.width / 2,
-            self.height / 2 - 12,
+            self.height / 2 + 48,
+            arcade.color.LIGHT_GRAY,
+            font_size=16,
+            anchor_x="center",
+            anchor_y="center",
+        )
+
+        button_w = 280.0
+        button_h = 44.0
+        resume_cx = self.width / 2
+        resume_cy = self.height / 2 - 2
+        menu_cx = self.width / 2
+        menu_cy = self.height / 2 - 60
+
+        self._game_over_resume_bounds = (
+            resume_cx - button_w / 2,
+            resume_cx + button_w / 2,
+            resume_cy - button_h / 2,
+            resume_cy + button_h / 2,
+        )
+        self._game_over_menu_bounds = (
+            menu_cx - button_w / 2,
+            menu_cx + button_w / 2,
+            menu_cy - button_h / 2,
+            menu_cy + button_h / 2,
+        )
+
+        arcade.draw_rect_filled(arcade.rect.XYWH(resume_cx, resume_cy, button_w, button_h), (56, 104, 74, 235))
+        arcade.draw_rect_outline(arcade.rect.XYWH(resume_cx, resume_cy, button_w, button_h), (220, 255, 220, 220), 2)
+        arcade.draw_text(
+            "Resume",
+            resume_cx,
+            resume_cy,
+            arcade.color.WHITE,
+            font_size=18,
+            anchor_x="center",
+            anchor_y="center",
+            bold=True,
+        )
+
+        arcade.draw_rect_filled(arcade.rect.XYWH(menu_cx, menu_cy, button_w, button_h), (78, 78, 92, 235))
+        arcade.draw_rect_outline(arcade.rect.XYWH(menu_cx, menu_cy, button_w, button_h), (220, 220, 240, 220), 2)
+        arcade.draw_text(
+            "Back to Menu",
+            menu_cx,
+            menu_cy,
             arcade.color.WHITE,
             font_size=18,
             anchor_x="center",
             anchor_y="center",
         )
+
+    @staticmethod
+    def _point_in_bounds(x: float, y: float, bounds: tuple[float, float, float, float] | None) -> bool:
+        if bounds is None:
+            return False
+        left, right, bottom, top = bounds
+        return left <= x <= right and bottom <= y <= top
+
+    def _default_spawn_point(self) -> tuple[float, float]:
+        """Berechnet den initialen Spawnpunkt dieser Welt."""
+        spawn_x = SCREEN_WIDTH / 2
+        ground_y = self.world.get_ground_top(int(spawn_x))
+        spawn_y = ground_y + self.player.height / 2
+        return float(spawn_x), float(spawn_y)
+
+    def _respawn_player(self):
+        """Setzt den Spieler auf den Welt-Spawnpunkt zurück."""
+        spawn = self.world.get_spawn_point()
+        if spawn is None:
+            spawn = self._default_spawn_point()
+            self.world.set_spawn_point(spawn[0], spawn[1])
+
+        self.player.center_x = float(spawn[0])
+        self.player.center_y = float(spawn[1])
+        self.player.change_x = 0.0
+        self.player.change_y = 0.0
+        self.player.on_ground = False
+        self.player.health = int(self.player.max_health)
+        self.player.air_bubbles = int(self.player.max_air_bubbles)
+        self.player.invincibility_timer = 1.0
+        self.game_over = False
+        self.left_pressed = False
+        self.right_pressed = False
+        self.jump_pressed = False
+        self.camera.position = self._clamped_camera_position()
+
+    def _drop_inventory_on_death(self):
+        """Lässt den Spieler beim Tod alle Inventar-Items am Todesort fallen."""
+        base_x = float(self.player.center_x)
+        base_y = float(self.player.center_y)
+        spread = TILE_SIZE * 0.28
+
+        for slot in self.player.inventory.slots:
+            if slot.item is None or slot.count <= 0:
+                continue
+
+            entry_id = int(slot.item)
+            for _ in range(int(slot.count)):
+                jitter_x = random.uniform(-spread, spread)
+                jitter_y = random.uniform(-spread * 0.35, spread * 0.35)
+                texture = self.player.inventory.get_texture(entry_id)
+                if texture is None:
+                    continue
+                drop = DroppedItem(entry_id=entry_id, texture=texture, spawn_x=base_x + jitter_x, spawn_y=base_y + jitter_y)
+                self.dropped_items.append(drop)
+                self.dropped_item_sprite_list.append(drop.sprite)
+
+            slot.item = None
+            slot.count = 0
+
+    def _handle_player_death(self):
+        """Aktiviert Game Over und droppt das komplette Inventar einmalig."""
+        if self.game_over:
+            return
+        self.player.health = 0
+        self.player.change_x = 0.0
+        self.player.change_y = 0.0
+        self.player.finish_attack()
+        if self.player.is_mining:
+            self.player.cancel_mining()
+        self._drop_inventory_on_death()
+        self.game_over = True
 
     def _setup_start_menu_stub(self):
         """Initialisiert Startmenü-Daten für die Schüler-Challenge."""
@@ -572,8 +692,8 @@ class GameView(arcade.View):
         self.dropped_items.append(drop)
         self.dropped_item_sprite_list.append(drop.sprite)
 
-    def _update_dropped_items(self, delta_time: float):
-        """Aktualisiert Drop-Physik und sammelt erreichbare Items auf."""
+    def _update_dropped_items(self, delta_time: float, allow_pickup: bool = True):
+        """Aktualisiert Drop-Physik und sammelt optional erreichbare Items auf."""
         if not self.dropped_items:
             return
 
@@ -591,7 +711,11 @@ class GameView(arcade.View):
                 pickup_radius=self.item_pickup_radius,
             )
 
-            if wants_pickup:
+            if getattr(drop, "expired", False):
+                self.dropped_item_sprite_list.remove(drop.sprite)
+                continue
+
+            if allow_pickup and wants_pickup:
                 left = self.player.inventory.add_item(drop.entry_id, 1, preferred_slot_index=preferred_slot)
                 if left <= 0:
                     self.dropped_item_sprite_list.remove(drop.sprite)
@@ -935,9 +1059,10 @@ class GameView(arcade.View):
         self.frame_count = 0
         self.world = World(seed=self.start_world_seed if seed_override is None else seed_override)
         self.player = Player(world=self.world)
-        self.player.center_x = SCREEN_WIDTH / 2
-        ground_y = self.world.get_ground_top(int(self.player.center_x))
-        self.player.center_y = ground_y + self.player.height / 2
+        spawn_x, spawn_y = self._default_spawn_point()
+        self.world.set_spawn_point(spawn_x, spawn_y)
+        self.player.center_x = spawn_x
+        self.player.center_y = spawn_y
         self.player.change_x = 0.0
         self.player.change_y = 0.0
         self.player.on_ground = True
@@ -1084,6 +1209,15 @@ class GameView(arcade.View):
             placed_items[(world_x, tile_y)] = item_id
         self.world.placed_items = placed_items
 
+        spawn_data = world_data.get("spawn_point", {}) if isinstance(world_data, dict) else {}
+        spawn_x = spawn_data.get("x") if isinstance(spawn_data, dict) else None
+        spawn_y = spawn_data.get("y") if isinstance(spawn_data, dict) else None
+        if isinstance(spawn_x, (int, float)) and isinstance(spawn_y, (int, float)):
+            self.world.set_spawn_point(float(spawn_x), float(spawn_y))
+        else:
+            default_spawn_x, default_spawn_y = self._default_spawn_point()
+            self.world.set_spawn_point(default_spawn_x, default_spawn_y)
+
         self.player.center_x = float(player_data.get("position", {}).get("x", self.player.center_x))
         self.player.center_y = float(player_data.get("position", {}).get("y", self.player.center_y))
         self.player.change_x = float(player_data.get("velocity", {}).get("x", 0.0))
@@ -1132,6 +1266,7 @@ class GameView(arcade.View):
     def on_update(self, delta_time: float):
         """Wird regelmäßig pro Frame aufgerufen."""
         if self.game_over:
+            self._update_dropped_items(delta_time, allow_pickup=False)
             return
 
         self.frame_count += 1
@@ -1256,8 +1391,7 @@ class GameView(arcade.View):
         self._update_mobs(delta_time)
 
         if self.player.health <= 0:
-            self.player.health = 0
-            self.game_over = True
+            self._handle_player_death()
 
     def _screen_to_world(self, screen_x: float, screen_y: float):
         """Konvertiert Bildschirmkoordinaten in Weltkoordinaten."""
@@ -1451,13 +1585,17 @@ class GameView(arcade.View):
 
     def on_key_press(self, symbol: int, modifiers: int):
         """Reagiert auf Tastatureingaben."""
-        if symbol == arcade.key.ESCAPE and self.window is not None:
-            self.window.show_view(GameMenuView(self))
-            return
-
         if self.game_over:
             if symbol == arcade.key.ENTER:
-                self.setup()
+                self._respawn_player()
+            elif symbol == arcade.key.ESCAPE and self.window is not None:
+                from start_menu_view import StartMenuView
+
+                self.window.show_view(StartMenuView())
+            return
+
+        if symbol == arcade.key.ESCAPE and self.window is not None:
+            self.window.show_view(GameMenuView(self))
             return
 
         cmd_down = bool(modifiers & arcade.key.MOD_COMMAND)
@@ -1544,6 +1682,16 @@ class GameView(arcade.View):
     def on_mouse_press(self, x: float, y: float, button: int, modifiers: int):
         """Verarbeitet Links- und Rechtsklicks für Abbauen, Platzieren und Inventar-Interaktion."""
         if self.game_over:
+            if button == arcade.MOUSE_BUTTON_LEFT:
+                if self._point_in_bounds(x, y, self._game_over_resume_bounds):
+                    self._respawn_player()
+                    return
+                if self._point_in_bounds(x, y, self._game_over_menu_bounds):
+                    from start_menu_view import StartMenuView
+
+                    if self.window is not None:
+                        self.window.show_view(StartMenuView())
+                    return
             return
 
         self.mouse_screen_x = x

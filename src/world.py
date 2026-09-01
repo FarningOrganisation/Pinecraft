@@ -127,6 +127,8 @@ class World:
 
     def __init__(self, seed: int | None = None, load_radius: int = 3, unload_radius: int = 5, generator=None):
         self.seed = WORLD_SEED if seed is None else seed
+        self.spawn_x: float | None = None
+        self.spawn_y: float | None = None
         self.chunks: dict[int, Chunk] = {}
         self.placed_items: dict[tuple[int, int], int] = {}
         self.saved_chunk_blocks: dict[int, list[list[int]]] = {}
@@ -437,6 +439,17 @@ class World:
     def get_loaded_chunk_count(self) -> int:
         """Gibt die Anzahl der aktuell geladenen Chunks zurück."""
         return len(self.chunks)
+
+    def set_spawn_point(self, world_x: float, world_y: float) -> None:
+        """Setzt den initialen Welt-Spawnpunkt in Weltkoordinaten."""
+        self.spawn_x = float(world_x)
+        self.spawn_y = float(world_y)
+
+    def get_spawn_point(self) -> tuple[float, float] | None:
+        """Liefert den initialen Welt-Spawnpunkt oder None, falls noch nicht gesetzt."""
+        if self.spawn_x is None or self.spawn_y is None:
+            return None
+        return float(self.spawn_x), float(self.spawn_y)
 
     def to_block_position(self, world_x: float, world_y: float) -> tuple[int, int]:
         """Konvertiert eine Weltposition in Block-Koordinaten."""
