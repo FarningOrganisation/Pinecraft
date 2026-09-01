@@ -502,6 +502,8 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
         for index in range(9):
             row = index // 3
             col = index % 3
+            # UIGridLayout zählt Reihen von unten nach oben.
+            # Wir halten intern top-down (0..2 = oberste Reihe), daher invertieren wir nur fürs Rendering.
             grid_row = 2 - row
             slot_widget = SlotUIWidget(self, "crafting", index)
             crafting_grid.add(slot_widget, column=col, row=grid_row)
@@ -674,7 +676,8 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
         if result_item is None or output_count <= 0 or crafts_possible <= 0 or pattern is None:
             return False
 
-        remaining = inventory.add_item_to_empty_slots(result_item, output_count)
+        # Crafting-Ergebnis darf auch auf bestehende Stacks gelegt werden.
+        remaining = inventory.add_item(result_item, output_count)
         if remaining > 0:
             return False
 
@@ -781,13 +784,18 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
         result_item, _, _, _, _ = self._crafting_result_info()
         return result_item
 
+    @staticmethod
+    def _crafting_slot_index_for_grid_cell(row: int, col: int) -> int:
+        """Mappt top-down Grid-Zelle auf internen Slot-Index."""
+        return row * 3 + col
+
     def _current_crafting_grid(self):
         """Liefert den aktuellen 3x3-Crafting-Grid als Block-ID-Matrix."""
         grid = []
         for row in range(3):
             row_values = []
             for col in range(3):
-                index = row * 3 + col
+                index = self._crafting_slot_index_for_grid_cell(row, col)
                 item = self.crafting_slots[index].item
                 row_values.append(AIR if item is None else item)
             grid.append(row_values)
@@ -813,7 +821,7 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
                 if target_row < 0 or target_row >= 3 or target_col < 0 or target_col >= 3:
                     return 0
 
-                index = target_row * 3 + target_col
+                index = self._crafting_slot_index_for_grid_cell(target_row, target_col)
                 slot = self.crafting_slots[index]
 
                 if slot.item != required_item or slot.count <= 0:
@@ -853,7 +861,7 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
 
                 target_row = row + row_offset
                 target_col = col + col_offset
-                index = target_row * 3 + target_col
+                index = self._crafting_slot_index_for_grid_cell(target_row, target_col)
                 slot = self.crafting_slots[index]
                 slot.count -= crafts_count
                 if slot.count <= 0:

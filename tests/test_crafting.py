@@ -4,10 +4,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from blocks import AIR, OAK, OAK_PLANKS, STONE, COBBLESTONE
+from blocks import AIR, OAK, OAK_PLANKS, STONE, COBBLESTONE, get_background_block_id
 from crafting_recipes import CRAFTING_RECIPES
 from crafting import find_matching_recipe
-from items import STICK
+from items import STICK, STONE_PICKAXE, STONE_SWORD
 
 
 
@@ -84,7 +84,52 @@ class CraftingDetectionTests(unittest.TestCase):
         self.assertEqual(result_item, STONE)
         self.assertEqual(offset, (0, 1))
 
+    def test_stone_sword_matches_two_cobblestone_then_stick(self):
+        grid = [
+            [AIR, COBBLESTONE, AIR],
+            [AIR, COBBLESTONE, AIR],
+            [AIR, STICK, AIR],
+        ]
 
+        result_item, _, output_count, _ = find_matching_recipe(grid, CRAFTING_RECIPES)
+        self.assertEqual(result_item, STONE_SWORD)
+        self.assertEqual(output_count, 1)
+
+    def test_compact_pickaxe_pattern_without_air_matches_centered(self):
+        recipes = {
+            STONE: {
+                "pattern": [
+                    [COBBLESTONE, COBBLESTONE, COBBLESTONE],
+                    [STICK],
+                    [STICK],
+                ],
+                "count": 1,
+            }
+        }
+        grid = [
+            [COBBLESTONE, COBBLESTONE, COBBLESTONE],
+            [AIR, STICK, AIR],
+            [AIR, STICK, AIR],
+        ]
+
+        result_item, _, output_count, offset = find_matching_recipe(grid, recipes)
+        self.assertEqual(result_item, STONE)
+        self.assertEqual(output_count, 1)
+        self.assertEqual(offset, (0, 0))
+
+    def test_pickaxe_matches_with_cobblestone_background_variants(self):
+        cobblestone_background = get_background_block_id(COBBLESTONE)
+        self.assertIsNotNone(cobblestone_background)
+
+        grid = [
+            [cobblestone_background, cobblestone_background, cobblestone_background],
+            [AIR, STICK, AIR],
+            [AIR, STICK, AIR],
+        ]
+
+        result_item, _, output_count, _ = find_matching_recipe(grid, CRAFTING_RECIPES)
+        self.assertEqual(result_item, STONE_PICKAXE)
+        self.assertEqual(output_count, 1)
 
 if __name__ == "__main__":
     unittest.main()

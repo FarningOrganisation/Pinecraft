@@ -1,6 +1,6 @@
 """3x3-Crafting-Rezepte für Pinecraft."""
 
-from blocks import AIR, OAK, OAK_PLANKS, COBBLESTONE
+from blocks import OAK, OAK_PLANKS, COBBLESTONE, AIR
 from items import (
     CHARCOAL,
     STONE_PICKAXE,
@@ -26,7 +26,7 @@ CRAFTING_RECIPES = {
     STONE_SWORD: {
         "pattern": [
             [COBBLESTONE],
-            [STICK],
+            [COBBLESTONE],
             [STICK]
         ],
         "count": 1,
@@ -49,26 +49,20 @@ CRAFTING_RECIPES = {
         "count": 1,
     },
     OAK_PLANKS: {
-        "pattern": [
-            [AIR, AIR, AIR],
-            [AIR, OAK, AIR],
-            [AIR, AIR, AIR],
-        ],
+        "pattern": [[OAK]],
         "count": 4,
     },
     STICK: {
         "pattern": [
-            [AIR, AIR, AIR],
-            [AIR, OAK_PLANKS, AIR],
-            [AIR, OAK_PLANKS, AIR],
+            [OAK_PLANKS],
+            [OAK_PLANKS],
         ],
         "count": 4,
     },
     TORCH: {
         "pattern": [
-            [AIR, AIR, AIR],
-            [AIR, CHARCOAL, AIR],
-            [AIR, STICK, AIR],
+            [CHARCOAL],
+            [STICK],
         ],
         "count": 1,
     },
