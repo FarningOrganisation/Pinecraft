@@ -25,6 +25,7 @@ from blocks import (
     OAK,
     SAND,
     STONE,
+    is_block_falling,
     is_block_water_passable,
 )
 from resource_manager import resource_manager
@@ -44,6 +45,9 @@ UNDERGROUND_WATER_PREFERRED_HALF_SPAN = 36
 UNDERGROUND_LAVA_MAX_Y = 86
 UNDERGROUND_LAVA_MIN_Y = 6
 COASTAL_BEACH_BAND = 2
+GEN_SAND_SLIDE_CHANCE_SHALLOW = 0.10
+GEN_SAND_SLIDE_CHANCE_MEDIUM = 0.30
+GEN_SAND_SLIDE_CHANCE_STEEP = 0.50
 
 
 class WorldGenerator:
@@ -329,6 +333,82 @@ class WorldGenerator:
 
         return (ocean_mask + 0.18 * coastal_detail) > threshold
 
+    @staticmethod
+    def _slide_probability(depth_score: int) -> float:
+        """Wahrscheinlichkeit fuer diagonales Abrutschen je nach Gefaelle."""
+        if depth_score >= 3:
+            return GEN_SAND_SLIDE_CHANCE_STEEP
+        if depth_score >= 2:
+            return GEN_SAND_SLIDE_CHANCE_MEDIUM
+        return GEN_SAND_SLIDE_CHANCE_SHALLOW
+
+    def _settle_generated_falling_blocks(self, chunk: "Chunk", chunk_x: int) -> None:
+        """Simuliert Fallbloecke waehrend der Chunk-Generierung bis zur lokalen Ruhe."""
+
+        def local_fall_depth(local_x: int, y: int, max_probe: int = 6) -> int:
+            depth = 0
+            probe_y = y
+            while probe_y > 0 and depth < max_probe:
+                if chunk.get_block(local_x, probe_y - 1) != AIR:
+                    break
+                depth += 1
+                probe_y -= 1
+            return depth
+
+        max_ticks = 32
+        for tick in range(max_ticks):
+            moved_any = False
+
+            for y in range(1, chunk.height):
+                for local_x in range(chunk.width):
+                    block_id = chunk.get_block(local_x, y)
+                    if block_id == AIR or not is_block_falling(block_id):
+                        continue
+
+                    below_y = y - 1
+                    if chunk.get_block(local_x, below_y) == AIR:
+                        chunk.set_block(local_x, y, AIR)
+                        chunk.set_block(local_x, below_y, block_id)
+                        moved_any = True
+                        continue
+
+                    candidates: list[tuple[int, int]] = []
+                    for dx in (-1, 1):
+                        nx = local_x + dx
+                        if nx < 0 or nx >= chunk.width:
+                            continue
+                        if chunk.get_block(nx, y) != AIR:
+                            continue
+                        if chunk.get_block(nx, below_y) != AIR:
+                            continue
+                        depth = local_fall_depth(nx, below_y)
+                        candidates.append((depth, dx))
+
+                    if not candidates:
+                        continue
+
+                    best_depth = max(score for score, _dx in candidates)
+                    slide_chance = self._slide_probability(best_depth)
+                    world_x = chunk_x * CHUNK_WIDTH + local_x
+                    roll = self._rand01_2d(world_x, y, salt=1733 + tick * 31)
+                    if roll >= slide_chance:
+                        continue
+
+                    best_dirs = [dx for score, dx in candidates if score == best_depth]
+                    if len(best_dirs) == 1:
+                        slide_dx = best_dirs[0]
+                    else:
+                        chooser = self._rand01_2d(world_x, y, salt=1777 + tick * 29)
+                        slide_dx = best_dirs[0] if chooser < 0.5 else best_dirs[-1]
+
+                    target_x = local_x + slide_dx
+                    chunk.set_block(local_x, y, AIR)
+                    chunk.set_block(target_x, below_y, block_id)
+                    moved_any = True
+
+            if not moved_any:
+                break
+
     def generate_chunk(self, world: World, chunk_x: int):
         """Erzeugt einen deterministischen Chunk für eine gegebene Chunk-Koordinate."""
         if chunk_x in world.chunks:
@@ -529,6 +609,9 @@ class WorldGenerator:
             if 0 <= top_leaf_y < WORLD_HEIGHT and self._rand01(world_x, salt=89) > 0.9:
                 side = -1 if self._rand01(world_x, salt=97) < 0.5 else 1
                 place_generated(world_x + side, top_leaf_y, LEAVES, replace_air_only=True)
+
+        # Pass 3.5: Fallbloecke direkt waehrend der Generierung zur Ruhe bringen.
+        self._settle_generated_falling_blocks(chunk, chunk_x)
 
         # Pass 4: Natuerliche Fluessigkeiten (Meeresspiegel + unterirdische Wasser/Lava-Taschen).
         for local_x in range(chunk.width):
