@@ -41,7 +41,7 @@ SEA_LEVEL = 130
 UNDERGROUND_WATER_MAX_Y = 102
 UNDERGROUND_WATER_PREFERRED_Y = 72
 UNDERGROUND_WATER_PREFERRED_HALF_SPAN = 36
-UNDERGROUND_LAVA_MAX_Y = 74
+UNDERGROUND_LAVA_MAX_Y = 86
 UNDERGROUND_LAVA_MIN_Y = 6
 COASTAL_BEACH_BAND = 2
 
@@ -195,10 +195,21 @@ class WorldGenerator:
         lava_depth_factor = max(0.0, min(1.0, (UNDERGROUND_LAVA_MAX_Y - y) / float(UNDERGROUND_LAVA_MAX_Y - UNDERGROUND_LAVA_MIN_Y)))
         lava_depth_factor = lava_depth_factor**1.6
 
+        # In Erz-Tiefen wird Lava zusätzlich begünstigt, damit Mining riskanter wird.
+        very_deep_limit = int(WORLD_HEIGHT * 0.25)
+        ultra_deep_limit = int(WORLD_HEIGHT * 0.16)
+        lava_hazard_bonus = 0.0
+        if y <= very_deep_limit:
+            lava_hazard_bonus += 0.10
+        if y <= ultra_deep_limit:
+            lava_hazard_bonus += 0.08
+
         selector = self._value_noise_2d(world_x, y, cell_size=14, salt=1217)
 
-        lava_threshold = 0.14 + 0.56 * lava_depth_factor
-        water_threshold = 0.76 - 0.34 * medium_water_factor - 0.08 * depth_norm
+        lava_threshold = min(0.94, 0.20 + 0.62 * lava_depth_factor + lava_hazard_bonus)
+        water_threshold = 0.80 - 0.30 * medium_water_factor - 0.10 * depth_norm
+        if y <= very_deep_limit:
+            water_threshold += 0.06
 
         if y <= UNDERGROUND_LAVA_MAX_Y and selector < lava_threshold:
             return "lava"
