@@ -15,6 +15,7 @@ from blocks import (
     AIR, DIRT, GRASS, OAK, STONE, SAND,
     get_block_drop_id, 
     get_block_hardness, 
+    is_background_block,
     is_block_breakable, 
     is_block_solid
 )
@@ -578,6 +579,9 @@ class Player(AnimatedSprite):
         if place_target is None or selected_entry is None or self.inventory.get_item_count(selected_entry) <= 0:
             return False
 
+        target_kind, target_id = place_target
+        allow_background_support = target_kind == "block" and is_background_block(target_id)
+
         has_support = False
         for ny, nx in ((-1, 0), (1, 0), (0, 1), (0, -1)):
             support_x = tile_x - nx
@@ -585,7 +589,9 @@ class Player(AnimatedSprite):
             if support_y < 0:
                 continue
             support_id = world.get_block(support_x, support_y)
-            if support_id != AIR and is_block_solid(support_id):
+            if support_id == AIR:
+                continue
+            if is_block_solid(support_id) or (allow_background_support and is_background_block(support_id)):
                 has_support = True
                 break
 
