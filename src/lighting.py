@@ -176,13 +176,17 @@ class LightingSystem:
                     float surface_y = (s0 * 0.11) + (s1 * 0.22) + (s2 * 0.34) + (s3 * 0.22) + (s4 * 0.11);
 
                     float depth = max(0.0, surface_y - world_y);
+                    // Unter der Erde blendet Tageszeit weich auf einen festen Wert aus.
+                    float depth_daylight_influence = 1.0 - smoothstep(42.0, 140.0, depth);
+                    float effective_day_factor = mix(0.55, u_day_factor, depth_daylight_influence);
+
                     float cave_darkness = smoothstep(56.0, 520.0, depth);
-                    float day_strength = mix(0.72, 0.96, u_day_factor);
+                    float day_strength = mix(0.78, 0.94, effective_day_factor);
                     cave_darkness = clamp(cave_darkness * day_strength, 0.0, 0.92);
                     float local_light_receiver = smoothstep(10.0, 70.0, depth);
 
                     // Nacht heller, Twilight-Übergang breiter und weicher.
-                    float ambient = mix(0.48, 1.0, pow(clamp(u_day_factor, 0.0, 1.0), 1.55));
+                    float ambient = mix(0.58, 1.0, pow(clamp(effective_day_factor, 0.0, 1.0), 1.45));
                     float base_light = ambient * (1.0 - cave_darkness);
 
                     vec2 world_pos = vec2(world_x, world_y);
@@ -309,7 +313,7 @@ class LightingSystem:
         return chunk_x in world.chunks
 
     def sky_background_blend(self) -> float:
-        """0 = normale Sky-Farbe, 1 = tiefe Höhle; Abstand zur nächsten Open-Air-Säule bestimmt den Übergang."""
+        """0 = normale Sky-Farbe, 1 = tiefe Höhle; berücksichtigt Nähe zum Himmel plus Schachtgeometrie."""
         player_tile_x = int(self.window.player.center_x // TILE_SIZE)
         player_tile_y = int(self.window.player.center_y // TILE_SIZE)
         search_radius = 12
@@ -338,12 +342,89 @@ class LightingSystem:
                     nearest_sky_distance = dist
 
         if math.isinf(nearest_sky_distance):
-            return 1.0
+            base_blend = 1.0
+        else:
+            base_blend = max(0.0, min(1.0, (nearest_sky_distance - 2.0) / 11.0))
 
-        return max(0.0, min(1.0, (nearest_sky_distance - 2.0) / 11.0))
+        # Tiefe Schächte abdunkeln: schmale Open-Sky-Schächte verlieren Tageslicht schneller.
+        depth_tiles = self._player_depth_below_surface_tiles()
+        depth_factor = max(0.0, min(1.0, (depth_tiles - 6.0) / 24.0))
+
+        shaft_width = self._open_sky_span_at_player_depth(max_half_span=16)
+        width_factor = max(0.0, min(1.0, (shaft_width - 2.0) / 8.0))
+        narrowness = 1.0 - width_factor
+        shaft_blend = depth_factor * narrowness
+
+        return max(base_blend, shaft_blend)
+
+    def _player_has_open_sky(self) -> bool:
+        """True, wenn über dem Spieler in seiner Spalte kein lichtblockierender Block liegt."""
+        player_tile_x = int(self.window.player.center_x // TILE_SIZE)
+        player_tile_y = int(self.window.player.center_y // TILE_SIZE)
+        if player_tile_y < 0:
+            return False
+        top_occluder_y = self._column_top_occluder_y(player_tile_x)
+        return player_tile_y > top_occluder_y
+
+    def _player_depth_below_surface_tiles(self) -> float:
+        """Positive Tiefe in Tiles unter der lokalen Terrain-Oberfläche."""
+        player_tile_x = int(self.window.player.center_x // TILE_SIZE)
+        player_tile_y = int(self.window.player.center_y // TILE_SIZE)
+        surface_tile_y = self.window.world.get_surface_height(player_tile_x)
+        return max(0.0, float(surface_tile_y - player_tile_y))
+
+    def _open_sky_span_at_player_depth(self, max_half_span: int = 16) -> int:
+        """Breite zusammenhängender Spalten mit offenem Himmel auf Spielerhöhe."""
+        player_tile_x = int(self.window.player.center_x // TILE_SIZE)
+        player_tile_y = int(self.window.player.center_y // TILE_SIZE)
+        if player_tile_y < 0 or player_tile_y >= WORLD_HEIGHT:
+            return 0
+
+        def column_open_to_sky(tile_x: int) -> bool:
+            if not self._is_tile_column_loaded(self.window.world, tile_x):
+                return False
+            return player_tile_y > self._column_top_occluder_y(tile_x)
+
+        if not column_open_to_sky(player_tile_x):
+            return 0
+
+        left = player_tile_x
+        while player_tile_x - left < max_half_span and column_open_to_sky(left - 1):
+            left -= 1
+
+        right = player_tile_x
+        while right - player_tile_x < max_half_span and column_open_to_sky(right + 1):
+            right += 1
+
+        return right - left + 1
+
+    def _is_player_underground_for_daylight(self) -> bool:
+        """Untertage-Flag für tageszeitunabhängiges Licht (Höhle oder tiefer Schacht)."""
+        if self.sky_background_blend() > 0.65:
+            return True
+        return self._player_depth_below_surface_tiles() >= 10.0
+
+    def _can_player_see_celestials(self) -> bool:
+        """Himmelskörper nur mit offenem Himmel und nahe der Oberfläche sichtbar."""
+        if not self._player_has_open_sky():
+            return False
+        return self._player_depth_below_surface_tiles() < 10.0
 
     def ambient_color(self) -> tuple[int, int, int]:
         """Tagsüber neutral/weiß; bei Dämmerung/Nacht weicher und dunkler."""
+        if self._is_player_underground_for_daylight():
+            # Unterirdisch soll das globale Ambient unabhängig von Tageszeit stabil bleiben,
+            # aber mit Tiefe in Schächten/Höhlen dunkler werden.
+            depth_tiles = self._player_depth_below_surface_tiles()
+            depth_factor = max(0.0, min(1.0, (depth_tiles - 6.0) / 22.0))
+            dim = 1.0 - 0.5 * depth_factor
+            base = (72, 82, 118)
+            return (
+                int(base[0] * dim),
+                int(base[1] * dim),
+                int(base[2] * dim),
+            )
+
         day_factor = self.day_factor()
         if day_factor >= 0.60:
             return (255, 255, 255)
@@ -351,10 +432,10 @@ class LightingSystem:
         # Breiter Twilight-Bereich: langsamerer Lichtwechsel um Sunrise/Sunset.
         if day_factor > 0.20:
             t = (day_factor - 0.20) / (0.60 - 0.20)
-            return self.lerp_color((36, 43, 62), (255, 255, 255), t)
+            return self.lerp_color((44, 52, 76), (255, 255, 255), t)
 
         # Nacht etwas heller als zuvor.
-        return (58, 68, 102)
+        return (72, 82, 118)
 
     def draw_sky_shader(self):
         """Zeichnet den dynamischen Himmel per Fullscreen-Fragment-Shader."""
@@ -435,6 +516,10 @@ class LightingSystem:
 
     def torch_daylight_multiplier(self, world_x: float, world_y: float) -> float:
         """Torch visibility fades almost to zero in bright daylight and rises again toward dusk/night."""
+        if self._is_player_underground_for_daylight():
+            # Wenn der Spieler unter Tage ist, sollen Torch-Lichter tageszeitunabhängig sein.
+            return 1.0
+
         day_factor = self.day_factor()
         tile_x = int(world_x // TILE_SIZE)
         tile_y = int(world_y // TILE_SIZE)
@@ -448,12 +533,8 @@ class LightingSystem:
                 return 1.0
             return max(0.0, 1.0 - (day_factor - 0.25) / (0.60 - 0.25))
 
-        # Unterirdisch darf Torch auch tagsüber sichtbar bleiben.
-        if day_factor <= 0.15:
-            return 1.0
-        if day_factor >= 0.90:
-            return 0.35
-        return max(0.35, 1.0 - ((day_factor - 0.15) / (0.90 - 0.15)) * 0.65)
+        # Unterirdisch bleibt Torch-Licht konstant, unabhängig von Tageszeit.
+        return 1.0
 
     def _torch_shadow_positions(self) -> list[tuple[int, int]]:
         """Positionsliste aller Lichtquellen, die die Dunkelheitsmaske aufhellen sollen."""
@@ -787,9 +868,8 @@ class LightingSystem:
         if moon_screen_pos is None:
             return None
 
-        # Mondlicht nur dann, wenn der gleiche Underground-Indikator wie beim
-        # braunen Cave-Background noch ausreichend offenen Himmel meldet.
-        if self.sky_background_blend() > 0.65:
+        # Mondlicht nur mit offenem Himmel und nahe der Oberfläche.
+        if not self._can_player_see_celestials():
             return None
 
         moon_x_screen, moon_y_screen = moon_screen_pos
@@ -837,7 +917,7 @@ class LightingSystem:
                 continue
 
             light_x = (tile_x + 0.5) * TILE_SIZE
-            light_y = (tile_y + 1.0) * TILE_SIZE
+            light_y = (tile_y + 0.5) * TILE_SIZE
             torch_scale = self.torch_daylight_multiplier(light_x, light_y)
             if torch_scale <= 0.01:
                 continue
@@ -909,7 +989,7 @@ class LightingSystem:
 
     def draw_celestials(self):
         """Zeichnet Sonne und Mond von rechts nach links über den Himmel."""
-        if self.sky_background_blend() > 0.65:
+        if not self._can_player_see_celestials():
             return
 
         sun_progress = (self.window.time_of_day - 0.25) / 0.5
@@ -926,7 +1006,7 @@ class LightingSystem:
 
     def draw_moon_no_ambient(self):
         """Zeichnet den Mond mit Originaltextur in einem separaten Pass ohne Ambient-Tint."""
-        if self.sky_background_blend() > 0.65:
+        if not self._can_player_see_celestials():
             return
 
         moon_screen_pos = self._moon_screen_position()

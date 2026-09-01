@@ -232,9 +232,9 @@ class GameView(arcade.View):
 
     @staticmethod
     def _torch_light_position(tile_x: int, tile_y: int) -> tuple[float, float]:
-        """Lichtpunkt für eine platzierte Fackel (oben in der Texturmitte)."""
+        """Lichtpunkt für eine platzierte Fackel (Zentrum der Blockzelle)."""
         x = (tile_x + 0.5) * TILE_SIZE
-        y = (tile_y + 1.0) * TILE_SIZE
+        y = (tile_y + 0.5) * TILE_SIZE
         return x, y
 
     def _collect_loaded_torch_tiles(self) -> set[tuple[int, int]]:
@@ -430,12 +430,11 @@ class GameView(arcade.View):
 
     def _sync_torch_lights(self):
         """Synchronisiert Spieler-/Welt-Fackeln und gesampelte Lava-Lichter mit dem aktuellen Zustand."""
-        torch_daylight_scale = self._torch_daylight_multiplier(self.player.center_x, self.player.center_y)
-
         if self._is_torch_equipped():
             light_pos = self.player.get_equipped_light_source_position()
             if light_pos is None:
-                light_pos = (self.player.center_x, self.player.center_y + self.player.height * 0.10)
+                light_pos = (self.player.center_x, self.player.center_y)
+            torch_daylight_scale = self._torch_daylight_multiplier(light_pos[0], light_pos[1])
             self.player_torch_light.position = light_pos
             self.player_torch_light.radius = 165.0 * torch_daylight_scale
             setattr(self.player_torch_light, "color", self.torch_light_color)
@@ -967,7 +966,7 @@ class GameView(arcade.View):
         self.physics = AABBPhysics(self.world)
         for light in list(self.light_layer):
             self.light_layer.remove(light)
-        self.player_torch_light = Light(0.0, 0.0, radius=0.0, color=(255, 255, 230), mode="soft")
+        self.player_torch_light = Light(0.0, 0.0, radius=0.0, color=self.torch_light_color, mode="soft")
         self.light_layer.add(self.player_torch_light)
         self.placed_torch_lights = {}
         self.sampled_lava_lights = {}
