@@ -182,12 +182,66 @@ class Mob(AnimatedSprite):
                 return False
         return True
 
+    def _has_headroom_for_jump(self, min_tiles: int = 2) -> bool:
+        """True, wenn ueber dem Mob genug freier Raum fuer einen Sprung ist."""
+        if self.world is None:
+            return False
+
+        left = self.center_x - self.collision_width / 2 + 2.0
+        right = self.center_x + self.collision_width / 2 - 2.0
+        start_tile_y = int((self.center_y + self.collision_height / 2 + 1.0) // TILE_SIZE)
+
+        for tile_x in range(int(left // TILE_SIZE), int(right // TILE_SIZE) + 1):
+            for dy in range(max(1, int(min_tiles))):
+                block_id = self.world.get_block(tile_x, start_tile_y + dy, generate_if_missing=False)
+                if block_id != AIR and is_block_solid(block_id):
+                    return False
+        return True
+
+    def _is_trapped_in_narrow_pit(self) -> bool:
+        """True, wenn links und rechts auf Bodenhoehe Wände stehen (typisch 1x1-Loch)."""
+        return self._grounded_below() and self._has_wall_in_front(1) and self._has_wall_in_front(-1)
+
+    def _try_pit_escape_jump(self) -> bool:
+        """Versucht einen gezielten Sprung aus einem schmalen Loch."""
+        if self.jump_cooldown > 0.0:
+            return False
+        if not self._has_headroom_for_jump(min_tiles=2):
+            return False
+
+        can_right = self._can_jump_over_obstacle(1)
+        can_left = self._can_jump_over_obstacle(-1)
+
+        if can_right and not can_left:
+            direction = 1
+        elif can_left and not can_right:
+            direction = -1
+        elif can_left and can_right:
+            direction = self.walk_direction if self.walk_direction in (-1, 1) else random.choice((-1, 1))
+        else:
+            direction = self.walk_direction if self.walk_direction in (-1, 1) else 1
+
+        self.walk_direction = direction
+        self.facing_right = direction >= 0
+        self.change_y = self.jump_strength * (1.0 + random.random() * 0.15)
+        self.change_x = direction * self.speed * 0.35
+        self.jump_cooldown = 0.35
+        self.needs_turning = False
+        return True
+
     def _update_unalerted_behavior(self, delta_time: float):
         """Default unalerted AI: wander, jump over obstacles, and turn around at walls."""
         if self.jump_cooldown > 0.0:
             self.jump_cooldown = max(0.0, self.jump_cooldown - delta_time)
 
         self.facing_right = self.walk_direction >= 0
+
+        # In engen Loechern nicht hektisch links/rechts flippen, sondern gezielt raus springen.
+        if self._is_trapped_in_narrow_pit():
+            if self._try_pit_escape_jump():
+                return
+            self.change_x = 0.0
+            return
 
         if self._grounded_below() and self._has_wall_in_front(self.walk_direction):
 

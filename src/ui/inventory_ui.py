@@ -502,11 +502,8 @@ class InventoryUI(arcade.gui.UIAnchorLayout):
         for index in range(9):
             row = index // 3
             col = index % 3
-            # UIGridLayout zählt Reihen von unten nach oben.
-            # Wir halten intern top-down (0..2 = oberste Reihe), daher invertieren wir nur fürs Rendering.
-            grid_row = 2 - row
             slot_widget = SlotUIWidget(self, "crafting", index)
-            crafting_grid.add(slot_widget, column=col, row=grid_row)
+            crafting_grid.add(slot_widget, column=col, row=row)
             self._slot_widgets.append(slot_widget)
 
         result_widget = SlotUIWidget(self, "result", None)

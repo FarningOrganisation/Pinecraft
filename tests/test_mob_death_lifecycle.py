@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from game import GameWindow
+from mobs.mob import Mob
 from mobs.slime import Slime
 from mobs.zombie import Zombie
 
@@ -84,10 +85,60 @@ class MobDeathLifecycleTests(unittest.TestCase):
         slime._velocity = (0.0, 0.0)
         slime.alive = False
         slime.vanish_after_death_timer = 0.5
+        slime.jump_phase = "idle"
+        slime.on_ground = True
+        slime.stun_timer = 0.0
+        slime.alerted = False
+        slime.set_state = lambda _state: None
 
         slime.update_ai(0.1, player=None)
 
         self.assertAlmostEqual(slime.vanish_after_death_timer, 0.4, places=6)
+
+    def test_mob_attempts_escape_jump_when_trapped_in_narrow_pit(self):
+        mob = Mob.__new__(Mob)
+        mob._position = (0.0, 0.0)
+        mob._velocity = (0.0, 0.0)
+        mob.jump_cooldown = 0.0
+        mob.walk_direction = 1
+        mob.facing_right = True
+        mob.speed = 100.0
+        mob.jump_strength = 300.0
+        mob.needs_turning = False
+        mob.change_x = 0.0
+        mob.change_y = 0.0
+        mob._grounded_below = lambda: True
+        mob._has_wall_in_front = lambda _direction: True
+        mob._has_headroom_for_jump = lambda min_tiles=2: True
+        mob._can_jump_over_obstacle = lambda _direction: True
+
+        mob._update_unalerted_behavior(0.016)
+
+        self.assertGreater(mob.change_y, 0.0)
+        self.assertNotEqual(mob.change_x, 0.0)
+        self.assertGreater(mob.jump_cooldown, 0.0)
+
+    def test_mob_does_not_flip_direction_in_pit_during_jump_cooldown(self):
+        mob = Mob.__new__(Mob)
+        mob._position = (0.0, 0.0)
+        mob._velocity = (0.0, 0.0)
+        mob.jump_cooldown = 0.2
+        mob.walk_direction = 1
+        mob.facing_right = True
+        mob.speed = 100.0
+        mob.jump_strength = 300.0
+        mob.needs_turning = False
+        mob.change_x = 12.0
+        mob.change_y = 0.0
+        mob._grounded_below = lambda: True
+        mob._has_wall_in_front = lambda _direction: True
+        mob._has_headroom_for_jump = lambda min_tiles=2: True
+        mob._can_jump_over_obstacle = lambda _direction: True
+
+        mob._update_unalerted_behavior(0.05)
+
+        self.assertEqual(mob.walk_direction, 1)
+        self.assertEqual(mob.change_x, 0.0)
 
 
 if __name__ == "__main__":
