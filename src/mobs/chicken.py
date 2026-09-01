@@ -7,7 +7,7 @@ from mobs.mob import Mob
 
 class Chicken(Mob):
     def __init__(self, world: World, x, y):
-        text_dir = textures_dir("mobs")
+        text_dir = textures_dir("mobs", "chicken")
         animations = {
             "walking": SpriteAnimation([text_dir / "chicken.png"]),
         }

@@ -19,7 +19,7 @@ class Slime(Monster):
         self.jump_direction = 1
         self.jump_phase = "idle"
 
-        mob_texture_dir = textures_dir("mobs")
+        mob_texture_dir = textures_dir("mobs", "slime")
         idle_texture = arcade.load_texture(mob_texture_dir / "Slime1.png")
         prep_textures = [arcade.load_texture(mob_texture_dir / f"Slime{i}.png") for i in range(1, 7)]
         jump_textures = [arcade.load_texture(mob_texture_dir / f"Slime{i}.png") for i in range(7, 13)]
