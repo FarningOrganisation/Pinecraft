@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-
 from animated_sprite import AnimatedSprite
 from blocks import AIR, is_block_solid
 from settings import GRAVITY, TILE_SIZE
@@ -37,7 +35,7 @@ class Mob(AnimatedSprite):
         self.change_y = 0.0
         self.on_ground = False
         self.stun_timer = 0.0
-        self.aggro_timer = 0.0
+        self.flee_timer = 0.0
         self.walk_direction = 1
         self.jump_strength = 350.0
         self.jump_cooldown = 0.0
@@ -78,7 +76,7 @@ class Mob(AnimatedSprite):
         self.change_x = knockback_x
         self.change_y = max(self.change_y, knockback_y)
         self.stun_timer = max(self.stun_timer, stun_duration)
-        self.aggro_timer = max(self.aggro_timer, 2.0)
+        self.flee_timer = max(self.flee_timer, 1.0)
         self.on_ground = False
 
     def on_death(self):
@@ -184,8 +182,8 @@ class Mob(AnimatedSprite):
                 return False
         return True
 
-    def _update_wander_behavior(self, delta_time: float):
-        """Default wander AI: move in one direction, jump over obstacles, and turn around at walls."""
+    def _update_unalerted_behavior(self, delta_time: float):
+        """Default unalerted AI: wander, jump over obstacles, and turn around at walls."""
         if self.jump_cooldown > 0.0:
             self.jump_cooldown = max(0.0, self.jump_cooldown - delta_time)
 
@@ -208,8 +206,22 @@ class Mob(AnimatedSprite):
 
         self.change_x = self.walk_direction * self.speed * 0.75
 
+    def _is_player_threatening(self, player) -> bool:
+        """Neutral mobs flee only after they were attacked."""
+        return player is not None and self.flee_timer > 0.0
+
+    def _update_alerted_behavior(self, player, delta_time: float, *, speed: float | None = None):
+        """Default neutral response: flee away from the player."""
+        if player is None:
+            return
+
+        direction_away = -self.player_direction(player)
+        self.facing_right = direction_away >= 0
+        effective_speed = self.speed if speed is None else speed
+        self.change_x = direction_away * effective_speed
+
     def update_ai(self, delta_time: float, player):
-        """Default AI is passive wandering. Aggressive mobs override this method."""
+        """Default AI is neutral: flee when threatened, otherwise wander."""
         if not self.alive:
             self.vanish_after_death_timer = max(0.0, self.vanish_after_death_timer - delta_time)
             return
@@ -219,10 +231,15 @@ class Mob(AnimatedSprite):
             self.change_x *= 0.9
             return
 
-        if self.aggro_timer > 0.0:
-            self.aggro_timer = max(0.0, self.aggro_timer - delta_time)
+        if self.flee_timer > 0.0:
+            self.flee_timer = max(0.0, self.flee_timer - delta_time)
 
-        self._update_wander_behavior(delta_time)
+        self.alerted = self._is_player_threatening(player)
+        if self.alerted and player is not None:
+            self._update_alerted_behavior(player, delta_time)
+            return
+
+        self._update_unalerted_behavior(delta_time)
         self.alerted = False
 
     def update(self, delta_time: float, player=None):
@@ -253,7 +270,7 @@ class Mob(AnimatedSprite):
             self.on_death()
             return True
 
-        self.aggro_timer = max(self.aggro_timer, 2.5)
+        self.flee_timer = max(self.flee_timer, 1.4)
         return False
 
     # function zum Überschreiben

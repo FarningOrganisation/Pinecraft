@@ -11,7 +11,6 @@ import random
 
 import arcade
 import arcade.gui
-from arcade.gl import geometry as gl_geometry
 from arcade.future.light import Light, LightLayer
 
 from blocks import AIR, BLOCK_TEXTURES, get_block_light_opacity, is_block_skylight_surface, is_block_solid

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-
 import arcade
 from paths import textures_dir
 
@@ -16,76 +14,100 @@ class Slime(Monster):
     # TODO_STUDENT (⭐⭐⭐): BabySlime einfuehren und beim Tod grosser Slimes spawnen.
 
     def __init__(self, world, x: float, y: float, health: int = 3):
-        self.jump_speed = 370.0
-        self.jump_cooldown = 0.4
+        self.jump_speed = 560.0
+        self.jump_forward_speed = 165.0
+        self.jump_direction = 1
+        self.jump_phase = "idle"
 
         mob_texture_dir = textures_dir("mobs")
         idle_texture = arcade.load_texture(mob_texture_dir / "Slime1.png")
-        move_textures = [arcade.load_texture(mob_texture_dir / f"Slime{i}.png") for i in range(1, 13)]
+        prep_textures = [arcade.load_texture(mob_texture_dir / f"Slime{i}.png") for i in range(1, 7)]
+        jump_textures = [arcade.load_texture(mob_texture_dir / f"Slime{i}.png") for i in range(7, 13)]
 
         animations = {
             "idle": SpriteAnimation([idle_texture], fps=1.5, loop=True),
-            "move": SpriteAnimation(move_textures, fps=10.0, loop=True),
+            "prep": SpriteAnimation(prep_textures, fps=14.0, loop=False),
+            "jump": SpriteAnimation(jump_textures, fps=14.0, loop=False),
         }
         super().__init__(
             world,
             x=x,
             y=y,
             health=health,
-            activate_range=260.0,
-            attack_range=32.0,
+            activate_range=500.0,
             speed=20.0,
             damage=1,
             animations=animations,
-            default_state="idle"
+            default_state="idle",
         )
-
 
         self.scale = 2
         self.collision_width = self.width
         self.collision_height = self.height
         self.current_state = "idle"
+        self.jump_cooldown = 0.0
 
-    def move_toward_player(self, player, delta_time: float, *, speed: float | None = None):
-        """Slime-specific movement with a jump arc toward the player."""
+    def _reset_prep_cycle(self):
+        """Startet den Kontraktionszyklus wieder bei Slime1."""
+        prep_animation = self.animations.get("prep")
+        if prep_animation is not None:
+            prep_animation.reset()
+            self.texture = prep_animation.texture
+
+    def _start_jump(self, direction: int):
+        """Launches an aggressive jump toward the current target direction."""
+        self.jump_direction = 1 if direction >= 0 else -1
+        self.change_x = direction * self.jump_forward_speed
+        self.change_y = self.jump_speed
+        self.on_ground = False
+        self.jump_phase = "air"
+        self.set_state("jump")
+
+    def _update_alerted_behavior(self, player, delta_time: float, *, speed: float | None = None):
+        """Runs the 1-12 slime jump cycle while chasing the player."""
         if player is None:
             return
 
         direction = self.player_direction(player)
         self.facing_right = direction >= 0
 
-        if self.on_ground and self.jump_cooldown <= 0.0:
-            wobble = 1.0 + 0.08 * math.sin(self.center_x * 0.07)
-            self.change_x = direction * self.speed * 1.15
-            self.change_y = self.jump_speed * wobble
-            self.on_ground = False
-            self.jump_cooldown = 0.95
-            self.set_state("move")
-        else:
-            self.change_x = direction * self.speed * 0.7
-
-    def update_ai(self, delta_time: float, player):
-        """Handles slime movement, state changes, and contact damage."""
-        if not self.alive:
-            self.vanish_after_death_timer = max(0.0, self.vanish_after_death_timer - delta_time)
+        if self.jump_phase == "air":
+            if self.on_ground:
+                self.change_x = 0.0
+                self.jump_phase = "pre_jump"
+                self.set_state("prep")
+                self._reset_prep_cycle()
+            else:
+                # Horizontalimpuls in der Luft erneut anwenden, falls Kollision ihn auf 0 gesetzt hat.
+                self.change_x = self.jump_direction * self.jump_forward_speed
+                self.set_state("jump")
             return
 
-        if self.stun_timer > 0.0:
-            self.stun_timer = max(0.0, self.stun_timer - delta_time)
+        self.change_x = 0.0
+        self.jump_phase = "pre_jump"
+        self.set_state("prep")
 
-        if self.jump_cooldown > 0.0:
-            self.jump_cooldown -= delta_time
+        prep_animation = self.animations.get("prep")
+        if prep_animation is not None and prep_animation.has_finished:
+            self._start_jump(direction)
 
-        self.on_ground = self.on_ground or self._grounded_below()
+    def _update_unalerted_behavior(self, delta_time: float):
+        """Slimes do not wander; they either keep their jump arc or stay still."""
+        if self.jump_phase == "air" and not self.on_ground:
+            self.change_x = self.jump_direction * self.jump_forward_speed
+            self.set_state("jump")
+            return
+
+        self.change_x = 0.0
         if self.on_ground:
-            self.change_y = 0.0
+            self.jump_phase = "idle"
 
-        self.alerted = self._can_see_player(player)
-        if self.alerted and self.stun_timer <= 0.0:
-            self.move_toward_player(player, delta_time)
-            self.set_state("move")
-        elif self.stun_timer > 0.0:
-            self.change_x *= 0.92
-        else:
-            self.change_x = 0.0
+    def update_ai(self, delta_time: float, player):
+        """Uses shared monster AI flow with slime-specific jump/wander behavior."""
+        super().update_ai(delta_time, player)
+
+        if self.jump_phase == "air" and not self.on_ground and self.stun_timer <= 0.0:
+            self.set_state("jump")
+        elif not self.alerted and self.on_ground:
+            self.jump_phase = "idle"
             self.set_state("idle")
