@@ -735,7 +735,7 @@ class GameView(arcade.View):
         self.lighting.draw_celestials()
 
     def _draw_moon_no_ambient(self):
-        """Wrapper to draw moon texture in a non-ambient pass."""
+        """Wrapper to draw moon texture after the lit world pass without ambient tint."""
         self.lighting.draw_moon_no_ambient()
 
     def _draw_stars_no_ambient(self):
@@ -1726,6 +1726,7 @@ class GameView(arcade.View):
         self.clear((0, 0, 0, 255))
 
         with self.light_layer:
+            self.ui_camera.use()
             self._draw_sky_shader()
 
             self.ui_camera.use()

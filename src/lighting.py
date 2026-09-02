@@ -14,7 +14,7 @@ from items import TORCH
 from lava_lighting import MAX_LAVA_LIGHT_SAMPLES, collect_lava_light_samples
 from paths import textures_dir
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
-from world_generation import SEA_LEVEL
+from world import world_to_chunk_and_local
 
 MAX_SHADER_LOCAL_LIGHTS = 32
 SHADER_TORCH_RADIUS = 250.0
@@ -359,6 +359,9 @@ class LightingSystem:
         else:
             base_blend = max(0.0, min(1.0, (nearest_sky_distance - 2.0) / 11.0))
 
+        if self._player_has_open_sky():
+            return base_blend
+
         # Tiefe Schächte abdunkeln: schmale Open-Sky-Schächte verlieren Tageslicht schneller.
         depth_tiles = self._player_depth_below_surface_tiles()
         depth_factor = max(0.0, min(1.0, (depth_tiles - 6.0) / 24.0))
@@ -413,15 +416,21 @@ class LightingSystem:
 
     def _is_player_underground_for_daylight(self) -> bool:
         """Untertage-Flag für tageszeitunabhängiges Licht (Höhle oder tiefer Schacht)."""
+        if self._player_has_open_sky():
+            return False
         if self.sky_background_blend() > 0.65:
             return True
         return self._player_depth_below_surface_tiles() >= 10.0
 
     def _can_player_see_celestials(self) -> bool:
-        """Himmelskörper nur mit offenem Himmel und nahe der Oberfläche sichtbar."""
-        if not self._player_has_open_sky():
-            return False
-        return self._player_depth_below_surface_tiles() < 10.0
+        """Himmelskörper sind sichtbar, sobald die Spielerspalte offenen Himmel hat."""
+        return self._player_has_open_sky()
+
+    def _fallback_surface_tile_y_for_unloaded_column(self, tile_x: int) -> int:
+        """Schnelle Terrain-Approximation fuer ungeladene Spalten ohne Chunk-Generierung."""
+        chunk_x, local_x = world_to_chunk_and_local(tile_x)
+        terrain_y = self.window.world.generator.terrain_height(chunk_x, local_x)
+        return int(terrain_y)
 
     def ambient_color(self) -> tuple[int, int, int]:
         """Tagsüber neutral/weiß; bei Dämmerung/Nacht weicher und dunkler."""
@@ -488,6 +497,11 @@ class LightingSystem:
 
         values = array("f")
         for tile_x in range(min_tile_x, max_tile_x + 1):
+            if not self._is_tile_column_loaded(self.window.world, tile_x):
+                surface_tile_y = self._fallback_surface_tile_y_for_unloaded_column(tile_x)
+                values.append(float((surface_tile_y + 1) * TILE_SIZE))
+                continue
+
             # Echte Spaltenoberfläche aus Blockstruktur statt Terrain-Funktionswert.
             surface_tile_y = -1
             for y in range(WORLD_HEIGHT - 1, -1, -1):
@@ -500,8 +514,6 @@ class LightingSystem:
 
             if surface_tile_y < 0:
                 surface_tile_y = self._column_top_occluder_y(tile_x)
-            if surface_tile_y < 0:
-                surface_tile_y = SEA_LEVEL
 
             values.append(float((surface_tile_y + 1) * TILE_SIZE))
 
@@ -906,6 +918,35 @@ class LightingSystem:
             return None
         return self._celestial_screen_position(moon_progress)
 
+    def _is_moon_visible_from_player(self, moon_world_x: float, moon_world_y: float) -> bool:
+        """Prueft per Sichtlinie, ob der Mond vom Spielerpunkt aus von Bloecken verdeckt ist."""
+        start_x = float(self.window.player.center_x)
+        start_y = float(self.window.player.center_y)
+        delta_x = float(moon_world_x - start_x)
+        delta_y = float(moon_world_y - start_y)
+        distance = math.hypot(delta_x, delta_y)
+        if distance <= 1e-6:
+            return True
+
+        step_size = max(6.0, TILE_SIZE * 0.5)
+        steps = max(1, int(distance / step_size))
+        inverse_steps = 1.0 / float(steps)
+
+        for step in range(1, steps):
+            t = step * inverse_steps
+            sample_x = start_x + delta_x * t
+            sample_y = start_y + delta_y * t
+            tile_x = int(sample_x // TILE_SIZE)
+            tile_y = int(sample_y // TILE_SIZE)
+            if tile_y < 0 or tile_y >= WORLD_HEIGHT:
+                continue
+
+            block_id = self.window.world.get_block(tile_x, tile_y, generate_if_missing=False)
+            if get_block_light_opacity(block_id) > 0.0:
+                return False
+
+        return True
+
     def _moon_world_light(self) -> tuple[float, float, float, float] | None:
         """Weltkoordinaten und Parameter einer mondfarbenen Lichtquelle."""
         moon_screen_pos = self._moon_screen_position()
@@ -920,6 +961,9 @@ class LightingSystem:
         # Explizites Mapping Screen -> World (gleiche Formel wie _screen_to_world im GameWindow).
         moon_world_x = self.window.camera.position[0] + (moon_x_screen - self.window.width * 0.5)
         moon_world_y = self.window.camera.position[1] + (moon_y_screen - self.window.height * 0.5)
+
+        if not self._is_moon_visible_from_player(moon_world_x, moon_world_y):
+            return None
 
         night_strength = max(0.0, 1.0 - self.day_factor())
         moon_radius = 760.0
@@ -1049,12 +1093,15 @@ class LightingSystem:
                 arcade.draw_circle_filled(sun_x, sun_y, 34, (255, 236, 130, 255))
 
     def draw_moon_no_ambient(self):
-        """Zeichnet den Mond mit Originaltextur in einem separaten Pass ohne Ambient-Tint."""
+        """Zeichnet den Mond nach dem Welt-Light-Pass ohne Ambient-Tint."""
         if not self._can_player_see_celestials():
             return
 
         moon_screen_pos = self._moon_screen_position()
         if moon_screen_pos is None:
+            return
+
+        if self._moon_world_light() is None:
             return
 
         moon_x, moon_y = moon_screen_pos
