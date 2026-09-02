@@ -54,7 +54,17 @@ class WorldGenConfig:
     """Parameter fuer Terrain, Biome, Erze, Hoehlen und Fluessigkeiten."""
 
     biome_noise_cell_size: int = 176
-    ocean_zone_cell_size: int = 960
+    single_ocean_mode: bool = True
+    single_ocean_center_x: int = 0
+    single_ocean_width: int = -1
+    ocean_islands_enabled: bool = True
+    ocean_island_cell_size: int = 96
+    ocean_island_threshold: float = 0.86
+    ocean_island_min_radius: int = 3
+    ocean_island_max_radius: int = 8
+    ocean_island_min_peak_above_sea: int = 2
+    ocean_island_max_peak_above_sea: int = 7
+    ocean_zone_cell_size: int = 640
     ocean_zone_threshold: float = -1.0
 
     biomes: tuple[BiomeDefinition, ...] = (
@@ -198,10 +208,27 @@ def validate_world_gen_config(config: WorldGenConfig) -> list[str]:
     if config.biome_noise_cell_size < 8:
         hints.append("biome_noise_cell_size sollte mindestens 8 sein.")
 
-    if config.ocean_zone_cell_size < 64:
-        hints.append("ocean_zone_cell_size sollte mindestens 64 sein.")
-    if config.ocean_zone_threshold != -1.0 and not (0.0 <= config.ocean_zone_threshold <= 1.0):
-        hints.append("ocean_zone_threshold muss -1.0 (auto) oder im Bereich [0.0, 1.0] sein.")
+    if config.single_ocean_mode:
+        if config.single_ocean_width != -1 and config.single_ocean_width < 8:
+            hints.append("single_ocean_width muss -1 (biome width) oder mindestens 8 sein.")
+    else:
+        if config.ocean_zone_cell_size < 64:
+            hints.append("ocean_zone_cell_size sollte mindestens 64 sein.")
+        if config.ocean_zone_threshold != -1.0 and not (0.0 <= config.ocean_zone_threshold <= 1.0):
+            hints.append("ocean_zone_threshold muss -1.0 (auto) oder im Bereich [0.0, 1.0] sein.")
+
+    if config.ocean_island_cell_size < 24:
+        hints.append("ocean_island_cell_size sollte mindestens 24 sein.")
+    if not (0.0 <= config.ocean_island_threshold <= 1.0):
+        hints.append("ocean_island_threshold sollte im Bereich [0.0, 1.0] liegen.")
+    if config.ocean_island_min_radius < 1:
+        hints.append("ocean_island_min_radius sollte mindestens 1 sein.")
+    if config.ocean_island_max_radius < config.ocean_island_min_radius:
+        hints.append("ocean_island_max_radius sollte >= ocean_island_min_radius sein.")
+    if config.ocean_island_min_peak_above_sea < 1:
+        hints.append("ocean_island_min_peak_above_sea sollte mindestens 1 sein.")
+    if config.ocean_island_max_peak_above_sea < config.ocean_island_min_peak_above_sea:
+        hints.append("ocean_island_max_peak_above_sea sollte >= ocean_island_min_peak_above_sea sein.")
 
     if not config.biomes:
         hints.append("Mindestens ein Biome muss definiert sein.")

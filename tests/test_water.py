@@ -1,5 +1,6 @@
 import sys
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -11,11 +12,13 @@ from game import GameWindow
 from player import Player
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_SEED
 from world import World
+from world_gen_config import DEFAULT_WORLD_GEN_CONFIG
 from world_generation import (
     COASTAL_BEACH_BAND,
     SEA_LEVEL,
     UNDERGROUND_WATER_MAX_Y,
     WATER_RENDER_THRESHOLD,
+    WorldGenerator,
     build_chunk_water_sprite_list,
     get_water_render_height,
 )
@@ -428,6 +431,112 @@ class WaterTests(unittest.TestCase):
                 break
 
         self.assertTrue(found_surface_water)
+
+    def test_ocean_columns_do_not_form_tiny_gap_chains(self):
+        world = World(seed=1337)
+        generator = world.generator
+
+        start_x = -6000
+        end_x = 6000
+        runs: list[tuple[str, int]] = []
+        current_kind = ""
+        current_len = 0
+
+        for world_x in range(start_x, end_x + 1):
+            tile_x = world_x
+            chunk_x = tile_x // CHUNK_WIDTH
+            local_x = tile_x % CHUNK_WIDTH
+            biome = generator._biome_for_world_x(tile_x)
+            surface_y = generator.terrain_height(chunk_x, local_x)
+            kind = "ocean" if generator._is_ocean_column(tile_x, surface_y, biome=biome) else "land"
+
+            if kind != current_kind:
+                if current_len > 0:
+                    runs.append((current_kind, current_len))
+                current_kind = kind
+                current_len = 1
+            else:
+                current_len += 1
+
+        if current_len > 0:
+            runs.append((current_kind, current_len))
+
+        tiny_gap_chains = 0
+        for index in range(1, len(runs) - 1):
+            left_kind, _left_len = runs[index - 1]
+            mid_kind, mid_len = runs[index]
+            right_kind, _right_len = runs[index + 1]
+            if left_kind == "ocean" and mid_kind == "land" and right_kind == "ocean" and mid_len <= 4:
+                tiny_gap_chains += 1
+
+        self.assertEqual(tiny_gap_chains, 0)
+
+    def test_default_config_uses_single_ocean_run(self):
+        world = World(seed=1337)
+        generator = world.generator
+
+        start_x = -6000
+        end_x = 6000
+        ocean_runs = 0
+        in_ocean = False
+
+        for world_x in range(start_x, end_x + 1):
+            tile_x = world_x
+            chunk_x = tile_x // CHUNK_WIDTH
+            local_x = tile_x % CHUNK_WIDTH
+            biome = generator._biome_for_world_x(tile_x)
+            surface_y = generator.terrain_height(chunk_x, local_x)
+            is_ocean = generator._is_ocean_column(tile_x, surface_y, biome=biome)
+
+            if is_ocean and not in_ocean:
+                ocean_runs += 1
+                in_ocean = True
+            elif not is_ocean and in_ocean:
+                in_ocean = False
+
+        self.assertTrue(generator.config.single_ocean_mode)
+        self.assertEqual(ocean_runs, 1)
+
+    def test_single_ocean_mode_can_generate_small_islands(self):
+        config = replace(
+            DEFAULT_WORLD_GEN_CONFIG,
+            single_ocean_mode=True,
+            single_ocean_center_x=0,
+            single_ocean_width=192,
+            ocean_islands_enabled=True,
+            ocean_island_threshold=0.0,
+            ocean_island_cell_size=80,
+            ocean_island_min_radius=3,
+            ocean_island_max_radius=6,
+            ocean_island_min_peak_above_sea=2,
+            ocean_island_max_peak_above_sea=5,
+        )
+        generator = WorldGenerator(seed=1337, config=config)
+        world = World(seed=1337, generator=generator)
+
+        for chunk_x in range(-3, 4):
+            world.generate_chunk(chunk_x)
+
+        found_island_block_at_sea_level = False
+        for chunk_x in range(-3, 4):
+            chunk = world.chunks.get(chunk_x)
+            if chunk is None:
+                continue
+
+            for local_x in range(chunk.width):
+                world_x = chunk_x * CHUNK_WIDTH + local_x
+                base_surface = generator.terrain_height(chunk_x, local_x)
+                if not generator._is_ocean_column(world_x, base_surface):
+                    continue
+
+                if chunk.get_block(local_x, SEA_LEVEL) != AIR:
+                    found_island_block_at_sea_level = True
+                    break
+
+            if found_island_block_at_sea_level:
+                break
+
+        self.assertTrue(found_island_block_at_sea_level)
 
     def test_generated_underground_cave_water_exists(self):
         world = World(seed=1337)

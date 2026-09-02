@@ -88,6 +88,8 @@ class WorldGenerator:
         )
         self._biome_cache: dict[int, BiomeDefinition] = {}
         self._terrain_height_cache: dict[int, int] = {}
+        self._ocean_zone_cell_cache: dict[int, tuple[bool, float]] = {}
+        self._ocean_island_cell_cache: dict[int, tuple[bool, int, int, int]] = {}
         probabilities = normalized_biome_probabilities(self.config)
         self._ocean_target_probability = sum(probability for biome, probability in probabilities if biome.is_ocean)
 
@@ -193,18 +195,124 @@ class WorldGenerator:
             return False
 
         cfg = self.config
+
+        if cfg.single_ocean_mode:
+            configured_width = int(cfg.single_ocean_width)
+            width = configured_width if configured_width > 0 else int(cfg.biome_noise_cell_size)
+            width = max(8, width)
+            half_width = width / 2.0
+            return abs(float(world_x - int(cfg.single_ocean_center_x))) <= half_width
+
         cell_size = max(64, int(cfg.ocean_zone_cell_size))
-        macro = self._value_noise_2d(world_x, self.seed * 3 + 17, cell_size=cell_size, salt=1691)
-        detail = self._value_noise_2d(world_x, self.seed * 5 + 29, cell_size=max(24, cell_size // 6), salt=1693)
-        signal = (macro * 0.86) + (detail * 0.14)
+        cell_index = math.floor(world_x / cell_size)
 
-        if cfg.ocean_zone_threshold >= 0.0:
-            threshold = float(cfg.ocean_zone_threshold)
+        cached = self._ocean_zone_cell_cache.get(cell_index)
+        if cached is None:
+            if cfg.ocean_zone_threshold >= 0.0:
+                threshold = float(cfg.ocean_zone_threshold)
+            else:
+                ocean_probability = max(0.06, min(0.45, float(self._ocean_target_probability) * 1.10))
+                threshold = 1.0 - ocean_probability
+
+            center_score = self._rand01_2d(cell_index, self.seed * 3 + 17, salt=1691)
+            left_score = self._rand01_2d(cell_index - 1, self.seed * 3 + 17, salt=1691)
+            right_score = self._rand01_2d(cell_index + 1, self.seed * 3 + 17, salt=1691)
+
+            left_candidate = left_score >= threshold
+            right_candidate = right_score >= threshold
+            is_candidate = center_score >= threshold
+            if is_candidate and left_candidate and center_score <= left_score:
+                is_candidate = False
+            if is_candidate and right_candidate and center_score < right_score:
+                is_candidate = False
+
+            width_noise = self._rand01_2d(cell_index, self.seed * 5 + 29, salt=1693)
+            half_width = 0.23 + 0.16 * width_noise
+            cached = (is_candidate, half_width)
+
+            if len(self._ocean_zone_cell_cache) >= 8192:
+                self._ocean_zone_cell_cache.clear()
+            self._ocean_zone_cell_cache[cell_index] = cached
+
+        is_active_cell, half_width = cached
+        if not is_active_cell:
+            return False
+
+        in_cell = (world_x - cell_index * cell_size) / float(cell_size)
+        center_distance = abs(in_cell - 0.5)
+        if center_distance <= half_width:
+            return True
+
+        fringe = half_width + 0.04
+        if center_distance > fringe:
+            return False
+
+        shoreline_noise = self._value_noise_2d(world_x, self.seed * 7 + 41, cell_size=max(20, cell_size // 10), salt=1697)
+        return shoreline_noise > 0.58
+
+    def _ocean_island_cell_profile(self, cell_index: int, cell_size: int) -> tuple[bool, int, int, int]:
+        """Erzeugt deterministische Insel-Parameter pro Ocean-Cell."""
+        cached = self._ocean_island_cell_cache.get(cell_index)
+        if cached is not None:
+            return cached
+
+        cfg = self.config
+        threshold = max(0.0, min(1.0, float(cfg.ocean_island_threshold)))
+        active_roll = self._rand01_2d(cell_index, self.seed * 11 + 7, salt=1741)
+        active = active_roll >= threshold
+        if not active:
+            profile = (False, 0, 0, 0)
         else:
-            ocean_probability = max(0.02, min(0.95, float(self._ocean_target_probability)))
-            threshold = 1.0 - ocean_probability
+            center_offset_roll = self._rand01_2d(cell_index, self.seed * 13 + 11, salt=1743)
+            center_offset = int((center_offset_roll - 0.5) * (cell_size * 0.62))
+            center_x = cell_index * cell_size + (cell_size // 2) + center_offset
 
-        return signal >= threshold
+            min_radius = max(1, int(cfg.ocean_island_min_radius))
+            max_radius = max(min_radius, int(cfg.ocean_island_max_radius))
+            radius_span = max_radius - min_radius + 1
+            radius_roll = self._rand01_2d(cell_index, self.seed * 17 + 19, salt=1745)
+            radius = min_radius + int(radius_roll * radius_span)
+            radius = max(min_radius, min(max_radius, radius))
+
+            min_peak = max(1, int(cfg.ocean_island_min_peak_above_sea))
+            max_peak = max(min_peak, int(cfg.ocean_island_max_peak_above_sea))
+            peak_span = max_peak - min_peak + 1
+            peak_roll = self._rand01_2d(cell_index, self.seed * 19 + 23, salt=1747)
+            peak_height = min_peak + int(peak_roll * peak_span)
+            peak_height = max(min_peak, min(max_peak, peak_height))
+
+            profile = (True, center_x, radius, peak_height)
+
+        if len(self._ocean_island_cell_cache) >= 8192:
+            self._ocean_island_cell_cache.clear()
+        self._ocean_island_cell_cache[cell_index] = profile
+        return profile
+
+    def _ocean_island_surface_override(self, world_x: int, base_surface_y: int, is_ocean_column: bool) -> int:
+        """Hebt in Ocean-Spalten kleine Inseln ueber Meeresspiegel an."""
+        cfg = self.config
+        if not is_ocean_column or not cfg.ocean_islands_enabled:
+            return base_surface_y
+
+        cell_size = max(24, int(cfg.ocean_island_cell_size))
+        cell_index = math.floor(world_x / cell_size)
+        best_top_y = base_surface_y
+
+        for island_cell in (cell_index - 1, cell_index, cell_index + 1):
+            active, center_x, radius, peak_height = self._ocean_island_cell_profile(island_cell, cell_size)
+            if not active or radius <= 0:
+                continue
+
+            dist = abs(world_x - center_x)
+            if dist > radius:
+                continue
+
+            t = 1.0 - (dist / float(max(1, radius)))
+            local_peak = cfg.sea_level + int(max(1.0, peak_height * (t * t)))
+            if local_peak > best_top_y:
+                best_top_y = local_peak
+
+        return max(base_surface_y, min(WORLD_HEIGHT - 2, int(best_top_y)))
 
     def _biome_for_world_x(self, world_x: int) -> BiomeDefinition:
         """Waehlt ein Biome ueber normalisierte Gewichte und glattes Noise."""
@@ -436,7 +544,39 @@ class WorldGenerator:
         return self._rand01(world_x, salt=401) < min(1.0, tree_density)
 
     def _is_ocean_column(self, world_x: int, surface_y: int, biome: BiomeDefinition | None = None) -> bool:
-        """True fuer Ocean-Biome und tiefe Talspalten unter Meeresspiegel."""
+        """True fuer Ocean-Biome und tiefe Talspalten; kleine Landluecken werden geglaettet."""
+        if self._is_ocean_column_base(world_x, surface_y, biome=biome):
+            return True
+
+        cfg = self.config
+        if cfg.single_ocean_mode:
+            return False
+        if surface_y >= cfg.sea_level:
+            return False
+
+        max_gap = 4
+        left_ocean_nearby = False
+        right_ocean_nearby = False
+        for offset in range(1, max_gap + 1):
+            left_x = world_x - offset
+            left_biome = self._biome_for_world_x(left_x)
+            left_surface_y = self._terrain_height_for_world_x(left_x, biome=left_biome)
+            if self._is_ocean_column_base(left_x, left_surface_y, biome=left_biome):
+                left_ocean_nearby = True
+                break
+
+        for offset in range(1, max_gap + 1):
+            right_x = world_x + offset
+            right_biome = self._biome_for_world_x(right_x)
+            right_surface_y = self._terrain_height_for_world_x(right_x, biome=right_biome)
+            if self._is_ocean_column_base(right_x, right_surface_y, biome=right_biome):
+                right_ocean_nearby = True
+                break
+
+        return left_ocean_nearby and right_ocean_nearby
+
+    def _is_ocean_column_base(self, world_x: int, surface_y: int, biome: BiomeDefinition | None = None) -> bool:
+        """Basisregel fuer Ocean-Spalten ohne Nachbarschaftsglaettung."""
         selected_biome = biome or self._biome_for_world_x(world_x)
         cfg = self.config
         if surface_y >= cfg.sea_level:
@@ -445,14 +585,22 @@ class WorldGenerator:
         if selected_biome.is_ocean:
             return True
 
-        depth = min(1.0, max(0.0, (cfg.sea_level - surface_y) / 14.0))
-        if depth < 0.45:
+        if cfg.single_ocean_mode:
             return False
 
-        ocean_mask = self._value_noise_2d(world_x, cfg.sea_level, cell_size=180, salt=1601)
-        coastal_detail = self._value_noise_2d(world_x, cfg.sea_level, cell_size=34, salt=1603)
-        threshold = 0.84 - 0.18 * depth
-        return (ocean_mask + 0.10 * coastal_detail) > threshold
+        depth = min(1.0, max(0.0, (cfg.sea_level - surface_y) / 14.0))
+        if depth < 0.72:
+            return False
+
+        ocean_mask = self._value_noise_2d(world_x, cfg.sea_level, cell_size=220, salt=1601)
+        left_mask = self._value_noise_2d(world_x - 32, cfg.sea_level, cell_size=220, salt=1601)
+        right_mask = self._value_noise_2d(world_x + 32, cfg.sea_level, cell_size=220, salt=1601)
+        if ocean_mask <= left_mask or ocean_mask < right_mask:
+            return False
+
+        coastal_detail = self._value_noise_2d(world_x, cfg.sea_level, cell_size=44, salt=1603)
+        threshold = 0.90 - 0.10 * depth
+        return (ocean_mask + 0.05 * coastal_detail) > threshold
 
     def _settle_generated_falling_blocks(self, chunk: "Chunk", chunk_x: int) -> None:
         """Simuliert Fallbloecke waehrend der Chunk-Generierung bis zur lokalen Ruhe."""
@@ -590,9 +738,10 @@ class WorldGenerator:
         for local_x in range(chunk.width):
             biome = biome_columns[local_x]
             world_x = chunk_world_x_base + local_x
-            height = self._terrain_height_for_world_x(world_x, biome=biome)
+            base_height = self._terrain_height_for_world_x(world_x, biome=biome)
+            is_ocean = self._is_ocean_column(world_x, base_height, biome=biome)
+            height = self._ocean_island_surface_override(world_x, base_height, is_ocean)
             surface_heights[local_x] = height
-            is_ocean = self._is_ocean_column(world_x, height, biome=biome)
             ocean_columns[local_x] = is_ocean
             is_coastal_band = cfg.sea_level <= height <= cfg.sea_level + cfg.coastal_beach_band
             coastal_sand_bias = self._rand01(world_x, salt=1231)
