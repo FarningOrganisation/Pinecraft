@@ -70,7 +70,10 @@ pinecraft/
 ├── main.py               # Launcher
 ├── src/                  # gesamter Spielcode
 ├── assets/               # Texturen, Sounds, Fonts
-├── Pinecraft_PLAN.md
+├── PLAN.md
+├── EXTENDING.md          # Student-Guide fuer eigene Erweiterungen
+├── CHALLENGES.md         # Aufgaben mit Tutorial-Referenzen
+├── tutorials/            # Schritt-fuer-Schritt-Tutorials
 └── requirements.txt
 ```
 
@@ -80,8 +83,12 @@ Wichtig: Asset-Pfade sind jetzt zentral aufgebaut und funktionieren auch, wenn d
 
 - Spielschleife, Eingaben, Kamera, Draw: `src/game.py`
 - Spieler (Bewegung, Angriff, Mining): `src/player.py`
-- Gegner-Basis: `src/enemies/enemy.py`
-- Slime-Verhalten: `src/enemies/slime.py`
+- Mob-Basis: `src/mobs/mob.py`
+- Monster-Basis: `src/mobs/monster.py`
+- Boss-Basis: `src/mobs/boss_monster.py`
+- Slime-Verhalten: `src/mobs/slime.py`
+- Boss-Slime: `src/mobs/slime_boss.py`
+- Mob-Templates: `src/mobs/mob_template.py`, `src/mobs/monster_template.py`, `src/mobs/boss_monster_template.py`
 - Blockdaten und Blocktexturen: `src/blocks.py`
 - Itemdaten und Itemtexturen: `src/items.py`
 - Inventar- und Item-Helfer: `src/inventory.py`
@@ -91,196 +98,29 @@ Wichtig: Asset-Pfade sind jetzt zentral aufgebaut und funktionieren auch, wenn d
 - Welt/Chunks: `src/world.py`, `src/world_generation.py`
 - Licht/Tag-Nacht: `src/lighting.py`
 
-## Challenges für Schüler:innen
+## Tutorials
 
-Alle Aufgaben sind absichtlich als Einstiegspunkte formuliert. Ihr müsst nicht die komplette Engine verstehen.
+Direkte Schritt-fuer-Schritt-Anleitungen:
 
-### ⭐ Challenge 1: Seed im Code ändern und Welt vergleichen
+- [Block Tutorial](tutorials/block_tutorial.md)
+- [Item Tutorial](tutorials/item_tutorial.md)
+- [Placeable Item Tutorial](tutorials/placeable_item_tutorial.md)
+- [Mob Tutorial](tutorials/mob_tutorial.md)
+- [Monster Tutorial](tutorials/monster_tutorial.md)
+- [Boss Tutorial](tutorials/boss_tutorial.md)
+- [Biome/Worldgen Tutorial](tutorials/biome_worldgen_tutorial.md)
 
-Ziel:
+## Erweitern im Original-Code
 
-1. Seed-Wert im Code anpassen.
-2. Spiel neu starten.
-3. Beobachten, wie sich die Weltform verändert.
+Ihr sollt explizit in den Originalmodulen arbeiten und daraus lernen.
 
-Einstiegspunkt:
+Empfohlener Einstieg:
 
-- `src/world.py` (Konstruktor mit `seed`)
-- optional `src/world_generation.py` (wie der Seed die Höhen/Caves beeinflusst)
+1. `EXTENDING.md` lesen.
+2. Passendes Tutorial waehlen.
+3. Kleine Aenderung machen und direkt im Spiel testen.
 
-Hinweis:
+## Challenges
 
-- Fangt mit kleinen Schritten an, z. B. `1337` -> `1338`.
-
-### ⭐ Challenge 2: Spiel starten und Pickaxe craften
-
-Ziel:
-
-1. Spiel starten.
-2. Inventar mit `E` oeffnen.
-3. Material in das 3x3-Crafting legen.
-4. Eine Pickaxe craften.
-
-Einstiegspunkt:
-
-- `src/crafting_recipes.py` (Rezeptaufbau verstehen)
-- `src/ui/inventory_ui.py` (Crafting-Logik im UI)
-
-Hinweis:
-
-- Das Pickaxe-Rezept ist bereits enthalten. Diese Challenge ist zum Verstehen des Systems.
-
-### ⭐⭐ Challenge 3: Sand-Block implementieren oder erweitern
-
-Idee:
-
-- Neuen Sand-Block fertig einbauen (falls noch nicht komplett), oder Sand fallen lassen, wenn darunter Luft ist.
-
-Einstiegspunkt:
-
-- `src/blocks.py` (Blockdefinition)
-- `src/world.py` oder `src/physics.py` (Verhalten)
-
-Hinweis:
-
-- Startet einfach mit Blockdaten, danach Verhalten.
-
-### ⭐⭐ Challenge 4: Tree Seeds als seltener Drop bei Holz
-
-Idee:
-
-- Beim Abbau von Baumstamm soll mit kleiner Chance ein Seed-Item droppen.
-
-Einstiegspunkt:
-
-- `src/items.py` (neues Item anlegen)
-- `src/player.py` (Drop-Logik nach Mining)
-- optional `src/blocks.py` (welcher Block als "Holz" gilt)
-
-Hinweis:
-
-- Erst mit fixer Chance starten, z. B. 5 Prozent.
-
-### ⭐ Challenge 5: Sword-Crafting-Rezept
-
-Idee:
-
-- Rezept für Schwert in das 3x3-Crafting aufnehmen.
-
-Einstiegspunkt:
-
-- `src/crafting_recipes.py`
-- `src/items.py` (falls neues Schwert-Item nötig)
-
-Hinweis:
-
-- Muster als 3x3-Grid in `CRAFTING_RECIPES` eintragen.
-
-### ⭐⭐⭐ Challenge 6: Startmenü mit Seed-Eingabe + Fullscreen-Option
-
-Idee:
-
-- Vor dem Spiel ein kleines Menü anzeigen:
-- Seed eintippen
-- Fullscreen ein/aus
-- dann auf "Play" starten
-
-Einstiegspunkt:
-
-- `src/game.py` (Fensterzustand, Eingaben, Startflow)
-- `src/world.py` (Seed an World uebergeben)
-- `src/settings.py` (Default-Werte, falls gewünscht)
-
-Hinweis:
-
-- Erst nur Seed-Auswahl bauen, danach Fullscreen als zweiter Schritt.
-
-### ⭐⭐⭐ Challenge 7: BabySlime beim Tod eines grossen Slimes
-
-Idee:
-
-- Wenn ein großer Slime stirbt, spawnen drei BabySlimes.
-
-Einstiegspunkt:
-
-- `src/enemies/slime.py` (Slime-Subklasse, Spawn-Parameter)
-- `src/enemies/enemy.py` (Death-Hook `on_death`)
-- `src/game.py` oder `src/enemies/enemy_spawning.py` (Spawn-Integration)
-
-Hinweis:
-
-- Erst einen kleineren Slime mit weniger HP bauen, dann Spawn beim Tod triggern.
-
-### ⭐⭐⭐ Challenge 8: Weitere Pickaxe-Rezepte
-
-Idee:
-
-- Iron Pickaxe, Gold Pickaxe, Diamond Pickaxe als craftbare Tools.
-
-Einstiegspunkt:
-
-- `src/items.py` (neue Item-Definitionen)
-- `src/crafting_recipes.py` (Rezepte)
-- `src/inventory.py` (optional Toolwerte wie Mining-Speed)
-
-Hinweis:
-
-- Erst die Items sichtbar machen, dann Werte wie `mining_speed` feinjustieren.
-
-### ⭐ Challenge 9: Hintergrundmusik beim Spielen
-
-Idee:
-
-- Beim Starten des Spiels soll Musik im Hintergrund laufen.
-
-Einstiegspunkt:
-
-- `src/game.py` (Initialisierung, Setup, Spielstart)
-
-Hinweis:
-
-- Nutzt eine Datei aus `assets/sounds/`.
-- Startet zunächst mit einer Schleife (Loop), Lautstärke später feinjustieren.
-
-### ⭐⭐ Challenge 10: Soundeffekte für Mining und Angriff
-
-Idee:
-
-- Beim Abbauen eines Blocks und beim Angriff sollen kurze Soundeffekte abgespielt werden.
-
-Einstiegspunkt:
-
-- `src/player.py` (`start_mining`, `release_mining_result`, `start_attack`)
-- `src/game.py` (Input-Pfade in `on_mouse_press`)
-
-Hinweis:
-
-- Erst einfache One-Shot-Sounds abspielen.
-- Danach optional unterscheiden: Treffer-Sound vs. Fehlschlag-Sound.
-
-### ⭐⭐⭐ Challenge 11: Hurt-Animation + Knockback für den Spieler
-
-Idee:
-
-- Wenn der Spieler Schaden bekommt, soll er eine kurze Hurt-Animation zeigen und zurückgestoßen werden.
-
-Einstiegspunkt:
-
-- `src/enemies/enemy.py` (`handle_contact_damage`)
-- `src/player.py` (neuer Hurt-Zustand, Timer, visuelles Feedback)
-- `src/physics.py` (Rückstoß sauber mit Kollisionen zusammenspielen lassen)
-
-Hinweis:
-
-- Startet mit kleinem Knockback und kurzer Unverwundbarkeitszeit.
-- Achtet darauf, dass der Spieler nach der Hurt-Phase wieder normal steuerbar ist.
-
-## Unterrichtsmodus: schnell erweitern
-
-Empfohlene Reihenfolge im Unterricht:
-
-1. Starten und kurz spielen.
-2. Eine ⭐ Aufgabe in 15-20 Minuten.
-3. Danach eine ⭐⭐ oder ⭐⭐⭐ Aufgabe in Teams.
-
-So bekommen alle schnell Erfolgserlebnisse und trotzdem spannende Vertiefung.
+Die Challenges liegen jetzt separat in [CHALLENGES.md](CHALLENGES.md) und
+verweisen jeweils auf passende Tutorials.

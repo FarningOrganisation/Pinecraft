@@ -32,6 +32,7 @@ from resource_manager import resource_manager
 BACKGROUND_BLOCK_ID_OFFSET = 200
 SOLID_BLOCK_ID_OFFSET = 400
 
+# Student-Hinweis: Neue Blocktypen werden als zusaetzliche Eintraege in BLOCKS angelegt.
 BLOCKS = {
     GRASS: {"name": "Grass", "texture": "grass.png", "solid": True, "drop_id": DIRT, "falling": False},
     DIRT: {"name": "Dirt", "texture": "dirt.png", "solid": True, "falling": False},
@@ -57,6 +58,53 @@ BLOCKS = {
     COBBLESTONE: {"name": "Cobblestone", "texture": "cobblestone.png", "solid": True, "hardness": 2.0, "falling": False},
     OBSIDIAN: {"name": "Obsidian", "texture": "obsidian.png", "solid": True, "hardness": 10},
 }
+
+
+def _warn_block_hint(block_id: object, message: str) -> None:
+    print(f"[blocks][hint] block={block_id}: {message}")
+
+
+def _validate_block_definitions() -> None:
+    """Gibt fruehe Hinweise bei fehlerhaften Blockdefinitionen aus."""
+    for block_id, definition in BLOCKS.items():
+        if not isinstance(block_id, int):
+            _warn_block_hint(block_id, "ID sollte ein int sein.")
+
+        if not isinstance(definition, dict):
+            _warn_block_hint(block_id, "Definition sollte ein dict sein.")
+            continue
+
+        if not definition.get("name"):
+            _warn_block_hint(block_id, "'name' fehlt oder ist leer.")
+
+        texture_name = definition.get("texture")
+        if not isinstance(texture_name, str) or not texture_name.strip():
+            _warn_block_hint(block_id, "'texture' fehlt oder ist ungueltig.")
+
+        if "hardness" in definition:
+            raw_hardness = definition.get("hardness")
+            try:
+                if raw_hardness is None:
+                    raise TypeError
+                hardness = float(raw_hardness)
+                if hardness <= 0 and not math.isinf(hardness):
+                    _warn_block_hint(block_id, "'hardness' sollte > 0 sein.")
+            except (TypeError, ValueError):
+                _warn_block_hint(block_id, "'hardness' muss numerisch sein.")
+
+        if "drop_id" in definition and not isinstance(definition.get("drop_id"), int):
+            _warn_block_hint(block_id, "'drop_id' sollte eine int-ID sein.")
+
+        if "drop_chance" in definition:
+            raw_drop_chance = definition.get("drop_chance")
+            try:
+                if raw_drop_chance is None:
+                    raise TypeError
+                chance = float(raw_drop_chance)
+                if chance < 0.0 or chance > 1.0:
+                    _warn_block_hint(block_id, "'drop_chance' sollte im Bereich [0.0, 1.0] liegen.")
+            except (TypeError, ValueError):
+                _warn_block_hint(block_id, "'drop_chance' muss numerisch sein.")
 
 EXCLUDED_BACKGROUND_CONVERSION_BLOCKS = {AIR, BEDROCK}
 
@@ -243,6 +291,7 @@ def is_block_skylight_surface(block_id: int) -> bool:
     return bool(block_definition.get("skylight_surface", True))
 
 TEXTURE_DIR = textures_dir("blocks")
+_validate_block_definitions()
 _build_background_conversion_tables()
 BLOCK_TEXTURES = {
     block_id: resource_manager.load_texture_in_textures(Path("blocks") / info["texture"])

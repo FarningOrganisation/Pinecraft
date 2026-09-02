@@ -33,3 +33,21 @@ HAMMER = ITEM_ID_START + 9
 SAPLING_OAK = ITEM_ID_START + 10
 FEATHER = ITEM_ID_START + 11
 EGG = ITEM_ID_START + 12
+
+# ---------------------------------------------------------------------------
+# Student-Erweiterungsbereiche
+# ---------------------------------------------------------------------------
+# Diese Bereiche sind fuer eigene Unterrichts-Erweiterungen reserviert,
+# damit neue IDs ohne Kollisionen mit dem Core angelegt werden koennen.
+
+# Freie Block-IDs fuer Schuelerprojekte (inklusive Grenzen).
+STUDENT_BLOCK_ID_START = 16
+STUDENT_BLOCK_ID_END = 63
+
+# Freie Item-IDs fuer Schuelerprojekte (inklusive Grenzen).
+STUDENT_ITEM_ID_START = ITEM_ID_START + 20
+STUDENT_ITEM_ID_END = ITEM_ID_START + 199
+
+# Beispiel (auskommentiert):
+# CUSTOM_BLOCK_MARBLE = STUDENT_BLOCK_ID_START
+# CUSTOM_ITEM_MARBLE_SHARD = STUDENT_ITEM_ID_START

@@ -17,9 +17,7 @@ from blocks import (
     BLOCK_TEXTURES,
     COAL_ORE,
     DIAMOND_ORE,
-    DIRT,
     GOLD_ORE,
-    GRASS,
     IRON_ORE,
     LEAVES,
     OAK,
@@ -35,6 +33,14 @@ from sand import slide_probability as sand_slide_probability
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
 from tree import build_oak_tree_layout, oak_trunk_height
 from world import World, world_to_chunk_and_local
+from world_gen_config import (
+    DEFAULT_WORLD_GEN_CONFIG,
+    BiomeDefinition,
+    WorldGenConfig,
+    get_biome_by_name,
+    normalized_biome_probabilities,
+    validate_world_gen_config,
+)
 
 WATER_TEXTURE = resource_manager.load_texture_in_textures(Path("blocks") / "water.png")
 WATER_VISUAL_STEPS = 8
@@ -42,20 +48,85 @@ WATER_RENDER_THRESHOLD = 0.02
 LAVA_TEXTURE = resource_manager.load_texture_in_textures(Path("blocks") / "lava.png")
 LAVA_VISUAL_STEPS = 8
 LAVA_RENDER_THRESHOLD = 0.02
-SEA_LEVEL = 130
-UNDERGROUND_WATER_MAX_Y = 102
-UNDERGROUND_WATER_PREFERRED_Y = 72
-UNDERGROUND_WATER_PREFERRED_HALF_SPAN = 36
-UNDERGROUND_LAVA_MAX_Y = 86
-UNDERGROUND_LAVA_MIN_Y = 6
-COASTAL_BEACH_BAND = 2
+
+# Default-Config bleibt als Modulkonstanten sichtbar, damit existierende
+# Aufrufer/Tests weiter funktionieren.
+WORLD_GEN_CONFIG = DEFAULT_WORLD_GEN_CONFIG
+SEA_LEVEL = WORLD_GEN_CONFIG.sea_level
+UNDERGROUND_WATER_MAX_Y = WORLD_GEN_CONFIG.underground_water_max_y
+UNDERGROUND_WATER_PREFERRED_Y = WORLD_GEN_CONFIG.underground_water_preferred_y
+UNDERGROUND_WATER_PREFERRED_HALF_SPAN = WORLD_GEN_CONFIG.underground_water_preferred_half_span
+UNDERGROUND_LAVA_MAX_Y = WORLD_GEN_CONFIG.underground_lava_max_y
+UNDERGROUND_LAVA_MIN_Y = WORLD_GEN_CONFIG.underground_lava_min_y
+COASTAL_BEACH_BAND = WORLD_GEN_CONFIG.coastal_beach_band
+
+# Profile-Format: (terrain_amp, detail_amp, tree_density, rockiness)
+_PLAINS_BIOME = get_biome_by_name(WORLD_GEN_CONFIG, "plains")
+_MIXED_BIOME = get_biome_by_name(WORLD_GEN_CONFIG, "mixed")
+_ROCKY_BIOME = get_biome_by_name(WORLD_GEN_CONFIG, "rocky")
+_MOUNTAIN_BIOME = get_biome_by_name(WORLD_GEN_CONFIG, "mountain")
+BIOME_PROFILE_PLAINS = (_PLAINS_BIOME.profile.as_tuple() if _PLAINS_BIOME else (0.62, 0.45, 1.15, 0.15))
+BIOME_PROFILE_MIXED = (_MIXED_BIOME.profile.as_tuple() if _MIXED_BIOME else (0.82, 0.55, 0.90, 0.45))
+BIOME_PROFILE_ROCKY = (_ROCKY_BIOME.profile.as_tuple() if _ROCKY_BIOME else (1.0, 0.65, 0.58, 1.0))
+BIOME_PROFILE_MOUNTAIN = (_MOUNTAIN_BIOME.profile.as_tuple() if _MOUNTAIN_BIOME else (1.35, 0.72, 0.42, 1.15))
 
 
 class WorldGenerator:
     """Erzeugt deterministisches Terrain für einen World-Container."""
 
-    def __init__(self, seed: int = 1337):
+    def __init__(self, seed: int = 1337, config: WorldGenConfig | None = None):
         self.seed = seed
+        self.config = config or DEFAULT_WORLD_GEN_CONFIG
+        for hint in validate_world_gen_config(self.config):
+            print(f"[worldgen][hint] {hint}")
+        self._biome_probability_table = self._build_biome_probability_table(self.config.biomes)
+        self._land_biome_probability_table = self._build_biome_probability_table(
+            tuple(biome for biome in self.config.biomes if not biome.is_ocean)
+        )
+        self._ocean_biome_probability_table = self._build_biome_probability_table(
+            tuple(biome for biome in self.config.biomes if biome.is_ocean)
+        )
+        self._biome_cache: dict[int, BiomeDefinition] = {}
+        self._terrain_height_cache: dict[int, int] = {}
+        probabilities = normalized_biome_probabilities(self.config)
+        self._ocean_target_probability = sum(probability for biome, probability in probabilities if biome.is_ocean)
+
+    def _build_biome_probability_table(self, biomes: tuple[BiomeDefinition, ...]) -> list[tuple[float, BiomeDefinition]]:
+        """Erzeugt kumulative Wahrscheinlichkeiten aus Biome-Gewichten."""
+        positive = [(biome, float(biome.weight)) for biome in biomes if float(biome.weight) > 0.0]
+        if not positive:
+            if biomes:
+                fallback = biomes[0]
+                return [(1.0, fallback)]
+            return []
+
+        total_weight = sum(weight for _biome, weight in positive)
+        if total_weight <= 0.0:
+            fallback = positive[0][0]
+            return [(1.0, fallback)]
+
+        table: list[tuple[float, BiomeDefinition]] = []
+        cumulative = 0.0
+        for biome, weight in positive:
+            probability = weight / total_weight
+            cumulative += probability
+            table.append((cumulative, biome))
+
+        if table:
+            table[-1] = (1.0, table[-1][1])
+        return table
+
+    def _pick_biome_from_table(self, selector: float, table: list[tuple[float, BiomeDefinition]]) -> BiomeDefinition:
+        """Wählt ein Biome aus einer kumulativen Wahrscheinlichkeits-Tabelle."""
+        if not table:
+            if self.config.biomes:
+                return self.config.biomes[0]
+            return BiomeDefinition(name="fallback", weight=1.0, profile=DEFAULT_WORLD_GEN_CONFIG.biomes[0].profile)
+
+        for cumulative_probability, biome in table:
+            if selector <= cumulative_probability:
+                return biome
+        return table[-1][1]
 
     def _hash_u32(self, value: int) -> int:
         """Kleiner deterministischer 32-bit Hash für stabile Zufallswerte."""
@@ -116,16 +187,57 @@ class WorldGenerator:
         ix1 = self._lerp(n01, n11, sx)
         return self._lerp(ix0, ix1, sy)
 
-    def _is_cave_air(self, world_x: int, y: int, surface_y: int) -> bool:
+    def _is_ocean_zone(self, world_x: int) -> bool:
+        """Makro-Zone fuer Ozeane, damit Ocean-Biome gebuendelt statt haeufig gestreut erscheinen."""
+        if not self._ocean_biome_probability_table:
+            return False
+
+        cfg = self.config
+        cell_size = max(64, int(cfg.ocean_zone_cell_size))
+        macro = self._value_noise_2d(world_x, self.seed * 3 + 17, cell_size=cell_size, salt=1691)
+        detail = self._value_noise_2d(world_x, self.seed * 5 + 29, cell_size=max(24, cell_size // 6), salt=1693)
+        signal = (macro * 0.86) + (detail * 0.14)
+
+        if cfg.ocean_zone_threshold >= 0.0:
+            threshold = float(cfg.ocean_zone_threshold)
+        else:
+            ocean_probability = max(0.02, min(0.95, float(self._ocean_target_probability)))
+            threshold = 1.0 - ocean_probability
+
+        return signal >= threshold
+
+    def _biome_for_world_x(self, world_x: int) -> BiomeDefinition:
+        """Waehlt ein Biome ueber normalisierte Gewichte und glattes Noise."""
+        cached = self._biome_cache.get(world_x)
+        if cached is not None:
+            return cached
+
+        cell_size = max(8, int(self.config.biome_noise_cell_size))
+        if self._is_ocean_zone(world_x) and self._ocean_biome_probability_table:
+            selector = self._value_noise_2d(world_x, self.seed + 91, cell_size=max(32, cell_size), salt=1711)
+            biome = self._pick_biome_from_table(selector, self._ocean_biome_probability_table)
+        else:
+            selector = self._value_noise_2d(world_x, self.seed, cell_size=cell_size, salt=1669)
+            table = self._land_biome_probability_table or self._biome_probability_table
+            biome = self._pick_biome_from_table(selector, table)
+
+        if len(self._biome_cache) >= 32768:
+            self._biome_cache.clear()
+        self._biome_cache[world_x] = biome
+        return biome
+
+    def _is_cave_air(self, world_x: int, y: int, surface_y: int, biome_cave_density_multiplier: float = 1.0) -> bool:
         """Entscheidet deterministisch, ob ein Untergrund-Block als Höhle leer bleibt."""
+        cfg = self.config
         if y <= 2:
             return False
 
         depth = surface_y - y
-        if depth < 6:
+        if depth < cfg.cave_min_depth:
             return False
 
-        depth_factor = min(1.0, max(0.0, (depth - 6) / 68.0))
+        depth_span = max(1.0, float(cfg.cave_depth_span))
+        depth_factor = min(1.0, max(0.0, (depth - cfg.cave_min_depth) / depth_span))
 
         # Zwei Skalen erzeugen verbundene Tunnel plus größere Kammern.
         large = self._value_noise_2d(world_x, y, cell_size=18, salt=811)
@@ -137,18 +249,32 @@ class WorldGenerator:
         ridge_medium = abs(medium - 0.5) * 2.0
         tunnel_signal = ridge_large * 0.68 + ridge_medium * 0.32
 
-        tunnel_threshold = 0.11 + 0.075 * depth_factor
-        chamber_open = chamber > (0.80 - 0.12 * depth_factor) and tunnel_signal < (0.22 + 0.04 * depth_factor)
+        cave_density = max(0.01, float(cfg.cave_density_multiplier)) * max(0.01, float(biome_cave_density_multiplier))
+        tunnel_threshold = (cfg.cave_tunnel_base_threshold + cfg.cave_tunnel_depth_bonus * depth_factor) * cave_density
+        chamber_open = chamber > (cfg.cave_chamber_base_threshold - cfg.cave_chamber_depth_bonus * depth_factor) and tunnel_signal < (
+            (cfg.cave_chamber_signal_base + cfg.cave_chamber_signal_depth_bonus * depth_factor) * cave_density
+        )
         return tunnel_signal < tunnel_threshold or chamber_open
 
-    def _pick_underground_block(self, world_x: int, y: int, surface_y: int) -> int:
+    def _pick_underground_block(
+        self,
+        world_x: int,
+        y: int,
+        surface_y: int,
+        *,
+        base_block_id: int = STONE,
+        biome_ore_density_multiplier: float = 1.0,
+    ) -> int:
         """Wählt für tiefe Steinbereiche deterministisch passende Erze aus."""
+        cfg = self.config
         depth_from_surface = max(0, surface_y - y)
         if depth_from_surface < 4:
-            return STONE
+            return base_block_id
 
         # Mehr Erze in größerer Tiefe.
-        depth_factor = min(1.0, max(0.0, (depth_from_surface - 4) / 72.0))
+        ore_depth_span = max(1.0, float(cfg.ore_depth_span))
+        depth_factor = min(1.0, max(0.0, (depth_from_surface - 4) / ore_depth_span))
+        ore_density = max(0.01, float(cfg.ore_density_multiplier)) * max(0.01, float(biome_ore_density_multiplier))
 
         # Grobe 2D-Patches (vein-artig), ohne teuren Noise-Overhead.
         patch_x = world_x // 4
@@ -156,17 +282,17 @@ class WorldGenerator:
         richness = 0.7 + 0.7 * self._rand01_2d(patch_x, patch_y, salt=719)
 
         # Insgesamt weniger Erze; Kohle und Eisen in aehnlicher Hauefigkeit.
-        coal_chance = (0.008 + 0.030 * depth_factor) * richness
-        iron_chance = (0.007 + 0.028 * depth_factor) * richness
+        coal_chance = (cfg.coal_base_chance + cfg.coal_depth_bonus * depth_factor) * richness * ore_density
+        iron_chance = (cfg.iron_base_chance + cfg.iron_depth_bonus * depth_factor) * richness * ore_density
 
-        very_deep_limit = int(WORLD_HEIGHT * 0.25)
-        ultra_deep_limit = int(WORLD_HEIGHT * 0.16)
+        very_deep_limit = int(WORLD_HEIGHT * cfg.gold_max_y_ratio)
+        ultra_deep_limit = int(WORLD_HEIGHT * cfg.diamond_max_y_ratio)
         gold_chance = 0.0
         diamond_chance = 0.0
         if y <= very_deep_limit:
-            gold_chance = (0.0008 + 0.0065 * depth_factor) * richness
+            gold_chance = (cfg.gold_base_chance + cfg.gold_depth_bonus * depth_factor) * richness * ore_density
         if y <= ultra_deep_limit:
-            diamond_chance = (0.00025 + 0.0035 * depth_factor) * richness
+            diamond_chance = (cfg.diamond_base_chance + cfg.diamond_depth_bonus * depth_factor) * richness * ore_density
 
         # Separate deterministische Rolls pro Erztyp verhindern Ueberlagerung.
         diamond_roll = self._rand01_2d(world_x, y, salt=701)
@@ -183,26 +309,28 @@ class WorldGenerator:
             return IRON_ORE
         if coal_roll < coal_chance:
             return COAL_ORE
-        return STONE
+        return base_block_id
 
     def _pick_underground_liquid(self, world_x: int, y: int) -> str | None:
         """Wählt für eine Höhlenzelle deterministisch Wasser oder Lava nach Tiefe."""
-        if y <= UNDERGROUND_LAVA_MIN_Y:
+        cfg = self.config
+        if y <= cfg.underground_lava_min_y:
             return None
 
-        depth_norm = max(0.0, min(1.0, 1.0 - (y / float(UNDERGROUND_WATER_MAX_Y))))
+        depth_norm = max(0.0, min(1.0, 1.0 - (y / float(max(1, cfg.underground_water_max_y)))))
 
         # Wasser bevorzugt mittlere Tiefen als glatte Glocke um einen Zielbereich.
-        medium_water_factor = 1.0 - abs(y - UNDERGROUND_WATER_PREFERRED_Y) / float(UNDERGROUND_WATER_PREFERRED_HALF_SPAN)
+        medium_water_factor = 1.0 - abs(y - cfg.underground_water_preferred_y) / float(max(1, cfg.underground_water_preferred_half_span))
         medium_water_factor = max(0.0, min(1.0, medium_water_factor))
 
         # Lava bevorzugt tiefe Schichten deutlich stärker.
-        lava_depth_factor = max(0.0, min(1.0, (UNDERGROUND_LAVA_MAX_Y - y) / float(UNDERGROUND_LAVA_MAX_Y - UNDERGROUND_LAVA_MIN_Y)))
+        lava_span = max(1, cfg.underground_lava_max_y - cfg.underground_lava_min_y)
+        lava_depth_factor = max(0.0, min(1.0, (cfg.underground_lava_max_y - y) / float(lava_span)))
         lava_depth_factor = lava_depth_factor**1.6
 
         # In Erz-Tiefen wird Lava zusätzlich begünstigt, damit Mining riskanter wird.
-        very_deep_limit = int(WORLD_HEIGHT * 0.25)
-        ultra_deep_limit = int(WORLD_HEIGHT * 0.16)
+        very_deep_limit = int(WORLD_HEIGHT * cfg.gold_max_y_ratio)
+        ultra_deep_limit = int(WORLD_HEIGHT * cfg.diamond_max_y_ratio)
         lava_hazard_bonus = 0.0
         if y <= very_deep_limit:
             lava_hazard_bonus += 0.10
@@ -216,34 +344,54 @@ class WorldGenerator:
         if y <= very_deep_limit:
             water_threshold += 0.06
 
-        if y <= UNDERGROUND_LAVA_MAX_Y and selector < lava_threshold:
+        if y <= cfg.underground_lava_max_y and selector < lava_threshold:
             return "lava"
-        if y <= UNDERGROUND_WATER_MAX_Y and selector > water_threshold:
+        if y <= cfg.underground_water_max_y and selector > water_threshold:
             return "water"
         return None
 
-    def _biome_value(self, world_x: int) -> float:
-        """Langsame Biome-Kurve in etwa [-1, 1]."""
-        low = math.sin((world_x + self.seed) * 0.0038)
-        mid = math.cos((world_x - self.seed) * 0.0019)
-        band = int(world_x // 28)
-        step = (self._rand01(band, salt=211) - 0.5) * 0.22
-        return max(-1.0, min(1.0, low * 0.62 + mid * 0.38 + step))
-
     def _biome_profile(self, world_x: int) -> tuple[float, float, float, float]:
         """Gibt (terrain_amp, detail_amp, tree_density, rockiness) zurück."""
-        biome = self._biome_value(world_x)
-        if biome < -0.2:
-            # Plains: eher glatt, mehr Grasland und Bäume.
-            return 0.62, 0.45, 1.15, 0.15
-        if biome > 0.62:
-            # Mountain: hohe Silhouetten, weniger Bäume, steiniger.
-            return 1.35, 0.72, 0.42, 1.15
-        if biome > 0.38:
-            # Rocky: etwas steiniger, weniger Bäume, mehr Artefakte.
-            return 1.0, 0.65, 0.58, 1.0
-        # Mixed/Hills: Mittelweg.
-        return 0.82, 0.55, 0.9, 0.45
+        biome = self._biome_for_world_x(world_x)
+        return biome.profile.as_tuple()
+
+    def _terrain_height_for_world_x(self, world_x: int, biome: BiomeDefinition | None = None) -> int:
+        """Erzeugt den Terrain-Hoehenwert fuer eine Welt-X-Koordinate mit Cache."""
+        cached_height = self._terrain_height_cache.get(world_x)
+        if cached_height is not None:
+            return cached_height
+
+        base_height = WORLD_HEIGHT // 2
+        selected_biome = biome or self._biome_for_world_x(world_x)
+        terrain_amp, detail_amp, _tree_density, _rockiness = selected_biome.profile.as_tuple()
+
+        large_wave = math.sin((world_x + self.seed) * 0.036) * 9.0 * terrain_amp
+        medium_wave = math.cos((world_x + self.seed) * 0.010) * 6.0 * terrain_amp
+        small_wave = math.sin((world_x + self.seed) * 0.075) * 1.6 * detail_amp
+        detail_wave = math.cos((world_x + self.seed) * 0.15) * 0.8 * detail_amp
+        jitter = (self._rand01(world_x, salt=31) - 0.5) * 1.0 * detail_amp
+
+        height = (
+            base_height
+            + large_wave
+            + medium_wave
+            + small_wave
+            + detail_wave
+            + jitter
+        )
+        height += float(selected_biome.height_bias)
+
+        if not selected_biome.is_ocean:
+            height += self._mountain_peak_add(world_x)
+
+        if selected_biome.is_ocean:
+            height = min(height, self.config.sea_level - 1)
+
+        clamped_height = max(8, min(WORLD_HEIGHT - 2, int(height)))
+        if len(self._terrain_height_cache) >= 65536:
+            self._terrain_height_cache.clear()
+        self._terrain_height_cache[world_x] = clamped_height
+        return clamped_height
 
     def _mountain_peak_add(self, world_x: int) -> float:
         """Seltene breite Bergzentren fuer deutlich höhere Berge."""
@@ -273,61 +421,38 @@ class WorldGenerator:
     def terrain_height(self, chunk_x: int, local_x: int) -> int:
         """Erzeugt einen stabilen, wiederholbaren Höhenwert mit Sinuswellen."""
         world_x = chunk_x * CHUNK_WIDTH + local_x
-        base_height = WORLD_HEIGHT // 2
-        biome = self._biome_value(world_x)
-        terrain_amp, detail_amp, _tree_density, _rockiness = self._biome_profile(world_x)
+        return self._terrain_height_for_world_x(world_x)
 
-        large_wave = math.sin((world_x + self.seed) * 0.036) * 9.0 * terrain_amp
-        medium_wave = math.cos((world_x + self.seed) * 0.010) * 6.0 * terrain_amp
-        small_wave = math.sin((world_x + self.seed) * 0.075) * 1.6 * detail_amp
-        detail_wave = math.cos((world_x + self.seed) * 0.15) * 0.8 * detail_amp
-
-        # Leichter Jitter gegen zu glatte Kanten, aber bewusst dezent.
-        jitter = (self._rand01(world_x, salt=31) - 0.5) * 1.0 * detail_amp
-
-        height = (
-            base_height
-            + large_wave
-            + medium_wave
-            + small_wave
-            + detail_wave
-            + jitter
-        )
-
-        # Seltene hohe Berge ueber Makro-Zonen, dazwischen bleibt es glatt.
-        height += self._mountain_peak_add(world_x)
-
-        return max(8, min(WORLD_HEIGHT - 2, int(height)))
-
-    def _has_tree(self, world_x: int) -> bool:
+    def _has_tree(self, world_x: int, biome: BiomeDefinition | None = None) -> bool:
         """Deterministische Baumverteilung entlang der X-Achse."""
-        _terrain_amp, _detail_amp, tree_density, _rockiness = self._biome_profile(world_x)
+        selected_biome = biome or self._biome_for_world_x(world_x)
+        if not selected_biome.allow_trees:
+            return False
+        _terrain_amp, _detail_amp, tree_density, _rockiness = selected_biome.profile.as_tuple()
         value = (world_x * 73856093 + self.seed * 19349663) & 0xFFFFFFFF
         base_tree = value % 17 == 0
         if not base_tree:
             return False
         return self._rand01(world_x, salt=401) < min(1.0, tree_density)
 
-    def _is_ocean_column(self, world_x: int, surface_y: int) -> bool:
-        """Deterministisch zusammenhängende Ozeanspalten unterhalb des Meeresspiegels."""
-        if surface_y >= SEA_LEVEL:
+    def _is_ocean_column(self, world_x: int, surface_y: int, biome: BiomeDefinition | None = None) -> bool:
+        """True fuer Ocean-Biome und tiefe Talspalten unter Meeresspiegel."""
+        selected_biome = biome or self._biome_for_world_x(world_x)
+        cfg = self.config
+        if surface_y >= cfg.sea_level:
             return False
 
-        # Tiefe Täler unterhalb des Meeresspiegels sollen deutlich häufiger Wasser
-        # bekommen. Das Biome wirkt nur als weicher Bias statt als hartes Gate,
-        # damit Spawn-Bereiche nicht komplett trocken ausfallen.
-        depth = min(1.0, max(0.0, (SEA_LEVEL - surface_y) / 14.0))
-        biome = max(-1.0, min(1.0, self._biome_value(world_x)))
+        if selected_biome.is_ocean:
+            return True
 
-        # Makro-Maske für breite Ozeanflächen plus feine Struktur für Kanten.
-        ocean_mask = self._value_noise_2d(world_x, SEA_LEVEL, cell_size=150, salt=1601)
-        coastal_detail = self._value_noise_2d(world_x, SEA_LEVEL, cell_size=26, salt=1603)
+        depth = min(1.0, max(0.0, (cfg.sea_level - surface_y) / 14.0))
+        if depth < 0.45:
+            return False
 
-        threshold = 0.70 - 0.24 * depth + max(0.0, biome) * 0.14
-        if biome > 0.55:
-            threshold += 0.08
-
-        return (ocean_mask + 0.18 * coastal_detail) > threshold
+        ocean_mask = self._value_noise_2d(world_x, cfg.sea_level, cell_size=180, salt=1601)
+        coastal_detail = self._value_noise_2d(world_x, cfg.sea_level, cell_size=34, salt=1603)
+        threshold = 0.84 - 0.18 * depth
+        return (ocean_mask + 0.10 * coastal_detail) > threshold
 
     def _settle_generated_falling_blocks(self, chunk: "Chunk", chunk_x: int) -> None:
         """Simuliert Fallbloecke waehrend der Chunk-Generierung bis zur lokalen Ruhe."""
@@ -424,6 +549,8 @@ class WorldGenerator:
         if chunk_x in world.chunks:
             return world.chunks[chunk_x]
 
+        cfg = self.config
+
         from world import Chunk
 
         saved_blocks = world.get_saved_chunk_blocks(chunk_x)
@@ -436,6 +563,7 @@ class WorldGenerator:
             return chunk
 
         chunk = Chunk(chunk_x=chunk_x)
+        chunk_world_x_base = chunk_x * CHUNK_WIDTH
 
         def place_generated(world_x: int, y: int, block_id: int, replace_air_only: bool = False):
             if y < 0 or y >= WORLD_HEIGHT:
@@ -456,38 +584,50 @@ class WorldGenerator:
             world.queue_generated_block(world_x, y, block_id)
         surface_heights: list[int] = [0] * chunk.width
         ocean_columns: list[bool] = [False] * chunk.width
+        biome_columns: list[BiomeDefinition] = [self._biome_for_world_x(chunk_world_x_base + local_x) for local_x in range(chunk.width)]
 
         # Pass 1: Basis-Terrain fuer alle Spalten aufbauen.
         for local_x in range(chunk.width):
-            height = self.terrain_height(chunk_x, local_x)
+            biome = biome_columns[local_x]
+            world_x = chunk_world_x_base + local_x
+            height = self._terrain_height_for_world_x(world_x, biome=biome)
             surface_heights[local_x] = height
-            world_x = chunk_x * CHUNK_WIDTH + local_x
-            is_ocean = self._is_ocean_column(world_x, height)
+            is_ocean = self._is_ocean_column(world_x, height, biome=biome)
             ocean_columns[local_x] = is_ocean
-            is_coastal_band = SEA_LEVEL <= height <= SEA_LEVEL + COASTAL_BEACH_BAND
+            is_coastal_band = cfg.sea_level <= height <= cfg.sea_level + cfg.coastal_beach_band
             coastal_sand_bias = self._rand01(world_x, salt=1231)
+            surface_block_id = int(biome.surface_block_id)
+            subsurface_block_id = int(biome.subsurface_block_id)
+            deep_block_id = int(biome.deep_block_id)
+            ocean_floor_block_id = int(biome.ocean_floor_block_id)
             for y in range(chunk.height):
                 if y == 0:
                     block_id = BEDROCK
                 elif y < height - 2:
-                    if self._is_cave_air(world_x, y, height):
+                    if self._is_cave_air(world_x, y, height, biome_cave_density_multiplier=biome.cave_density_multiplier):
                         block_id = AIR
                     else:
                         if is_ocean and y >= height - 4:
-                            block_id = SAND
+                            block_id = ocean_floor_block_id
                         elif is_coastal_band and y >= height - 3 and coastal_sand_bias < 0.45:
-                            block_id = SAND
+                            block_id = ocean_floor_block_id
                         else:
-                            block_id = self._pick_underground_block(world_x, y, height)
+                            block_id = self._pick_underground_block(
+                                world_x,
+                                y,
+                                height,
+                                base_block_id=deep_block_id,
+                                biome_ore_density_multiplier=biome.ore_density_multiplier,
+                            )
                 elif y < height:
                     if is_ocean:
-                        block_id = SAND
+                        block_id = ocean_floor_block_id
                     elif is_coastal_band and y >= height - 1 and coastal_sand_bias < 0.62:
-                        block_id = SAND
+                        block_id = ocean_floor_block_id
                     else:
-                        block_id = DIRT
+                        block_id = subsurface_block_id
                 elif y == height:
-                    block_id = SAND if (is_ocean or (is_coastal_band and coastal_sand_bias < 0.74)) else GRASS
+                    block_id = ocean_floor_block_id if (is_ocean or (is_coastal_band and coastal_sand_bias < 0.74)) else surface_block_id
                 else:
                     block_id = AIR
                 chunk.set_block(local_x, y, block_id)
@@ -495,8 +635,9 @@ class WorldGenerator:
         # Pass 2: Baeume nachtraeglich setzen, damit Blaetter nicht ueberschrieben werden.
         for local_x in range(chunk.width):
             height = surface_heights[local_x]
-            world_x = chunk_x * CHUNK_WIDTH + local_x
-            _terrain_amp, _detail_amp, _tree_density, rockiness = self._biome_profile(world_x)
+            world_x = chunk_world_x_base + local_x
+            biome = biome_columns[local_x]
+            _terrain_amp, _detail_amp, _tree_density, rockiness = biome.profile.as_tuple()
 
             # Rocky-Biome: gelegentliche Felsformationen.
             outcrop_chance = 0.012 * rockiness
@@ -526,7 +667,7 @@ class WorldGenerator:
         # Pass 3: Sand-Patches unter der Erdoberflaeche als zusammenhaengende Taschen.
         for local_x in range(chunk.width):
             height = surface_heights[local_x]
-            world_x = chunk_x * CHUNK_WIDTH + local_x
+            world_x = chunk_world_x_base + local_x
             if self._rand01(world_x, salt=901) > 0.28:
                 continue
 
@@ -555,12 +696,15 @@ class WorldGenerator:
 
         for local_x in range(chunk.width):
             height = surface_heights[local_x]
-            world_x = chunk_x * CHUNK_WIDTH + local_x
-            if height < SEA_LEVEL:
+            world_x = chunk_world_x_base + local_x
+            biome = biome_columns[local_x]
+            if height < cfg.sea_level:
                 continue
-            if chunk.get_block(local_x, height) != GRASS:
+            if not biome.allow_trees:
                 continue
-            if not self._has_tree(world_x):
+            if chunk.get_block(local_x, height) != biome.surface_block_id:
+                continue
+            if not self._has_tree(world_x, biome=biome):
                 continue
 
             trunk_base_y = height + 1
@@ -622,14 +766,14 @@ class WorldGenerator:
         # Pass 4: Natuerliche Fluessigkeiten (Meeresspiegel + unterirdische Wasser/Lava-Taschen).
         for local_x in range(chunk.width):
             surface_y = surface_heights[local_x]
-            world_x = chunk_x * CHUNK_WIDTH + local_x
+            world_x = chunk_world_x_base + local_x
 
             if ocean_columns[local_x]:
-                for y in range(surface_y + 1, min(SEA_LEVEL, WORLD_HEIGHT - 1) + 1):
+                for y in range(surface_y + 1, min(cfg.sea_level, WORLD_HEIGHT - 1) + 1):
                     if chunk.get_block(local_x, y) == AIR:
                         chunk.set_water(local_x, y, 1.0)
 
-            underground_max_y = min(max(UNDERGROUND_WATER_MAX_Y, UNDERGROUND_LAVA_MAX_Y), WORLD_HEIGHT - 2)
+            underground_max_y = min(max(cfg.underground_water_max_y, cfg.underground_lava_max_y), WORLD_HEIGHT - 2)
             for y in range(4, underground_max_y + 1):
                 if chunk.get_block(local_x, y) != AIR:
                     continue
@@ -644,7 +788,7 @@ class WorldGenerator:
 
                 cave_signal = self._value_noise_2d(world_x, y, cell_size=10, salt=1181)
                 pocket_signal = self._value_noise_2d(world_x, y, cell_size=22, salt=1193)
-                if cave_signal <= 0.66 or pocket_signal <= 0.56:
+                if cave_signal <= cfg.cave_pocket_signal_threshold or pocket_signal <= cfg.cave_pocket_chamber_threshold:
                     continue
 
                 liquid_type = self._pick_underground_liquid(world_x, y)

@@ -145,6 +145,9 @@ def matches_pattern(grid, pattern):
 
 def find_matching_recipe(grid, recipes):
     """Sucht das erste passende Rezept für den aktuellen Crafting-Grid."""
+    if not isinstance(recipes, dict):
+        return None, None, 0, None
+
     for result_item, recipe in recipes.items():
         if isinstance(recipe, list):
             if not recipe:
@@ -159,6 +162,9 @@ def find_matching_recipe(grid, recipes):
             output_count = 1
 
         if pattern is None:
+            continue
+
+        if not _iter_normalized_patterns(pattern):
             continue
 
         matched, offset, matched_pattern = matches_pattern(grid, pattern)

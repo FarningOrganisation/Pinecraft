@@ -122,6 +122,7 @@ ITEMS = {
         "item_type": "nature",
         "max_stack": 64,
         "texture_dir": "blocks",
+        # Student-Hinweis: place_as="item" + placement_rules machen ein Item platzierbar.
         "place_as": "item",
         "placement_rules": {
             "allowed_support_blocks": [GRASS, DIRT],
@@ -131,7 +132,60 @@ ITEMS = {
     
 }
 
+
+def _warn_item_hint(item_id: object, message: str) -> None:
+    print(f"[items][hint] item={item_id}: {message}")
+
+
+def _validate_item_definitions() -> None:
+    """Gibt fruehe Hinweise bei fehlerhaften Itemdefinitionen aus."""
+    valid_types = {"tool", "consumable", "material", "light", "nature"}
+    valid_place_as = {"item", "block"}
+
+    for item_id, definition in ITEMS.items():
+        if not isinstance(item_id, int):
+            _warn_item_hint(item_id, "ID sollte ein int sein.")
+
+        if not isinstance(definition, dict):
+            _warn_item_hint(item_id, "Definition sollte ein dict sein.")
+            continue
+
+        if definition.get("item_id") != item_id:
+            _warn_item_hint(item_id, "'item_id' sollte mit dem Dictionary-Key uebereinstimmen.")
+
+        if not definition.get("name"):
+            _warn_item_hint(item_id, "'name' fehlt oder ist leer.")
+
+        texture_name = definition.get("texture")
+        if not isinstance(texture_name, str) or not texture_name.strip():
+            _warn_item_hint(item_id, "'texture' fehlt oder ist ungueltig.")
+
+        item_type = definition.get("item_type")
+        if item_type not in valid_types:
+            _warn_item_hint(item_id, f"'item_type' sollte einer von {sorted(valid_types)} sein.")
+
+        try:
+            max_stack = int(definition.get("max_stack", 0))
+            if max_stack <= 0:
+                _warn_item_hint(item_id, "'max_stack' sollte > 0 sein.")
+        except (TypeError, ValueError):
+            _warn_item_hint(item_id, "'max_stack' muss numerisch sein.")
+
+        place_as = definition.get("place_as")
+        if place_as is not None and place_as not in valid_place_as:
+            _warn_item_hint(item_id, "'place_as' sollte 'item' oder 'block' sein.")
+
+        rules = definition.get("placement_rules")
+        if rules is not None and not isinstance(rules, dict):
+            _warn_item_hint(item_id, "'placement_rules' sollte ein dict sein.")
+
+        if isinstance(rules, dict):
+            support_blocks = rules.get("allowed_support_blocks")
+            if support_blocks is not None and not isinstance(support_blocks, (list, tuple, set)):
+                _warn_item_hint(item_id, "'allowed_support_blocks' sollte list/tuple/set sein.")
+
 TEXTURE_ROOT = textures_dir()
+_validate_item_definitions()
 
 
 def _item_texture_path(item_definition: dict) -> Path:
