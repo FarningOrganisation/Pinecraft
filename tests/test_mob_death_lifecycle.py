@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from game import GameWindow
 from ids import STICK
 from mobs.mob import Mob
+from mobs.slime_boss import SlimeBoss
 from mobs.slime import Slime
 from mobs.zombie import Zombie
 
@@ -27,6 +28,9 @@ class FakeMob:
 class FakeSpriteList:
     def __init__(self, items=None):
         self.items = list(items or [])
+
+    def append(self, mob):
+        self.items.append(mob)
 
     def remove(self, mob):
         self.items.remove(mob)
@@ -91,7 +95,7 @@ class MobDeathLifecycleTests(unittest.TestCase):
         slime.on_ground = True
         slime.stun_timer = 0.0
         slime.alerted = False
-        slime.set_state = lambda _state: None
+        slime.set_animation_state = lambda _state: None
 
         slime.update_ai(0.1, player=None)
 
@@ -174,6 +178,43 @@ class MobDeathLifecycleTests(unittest.TestCase):
         self.assertEqual(dropped_item_id, STICK)
         self.assertEqual(drop_x, 42.0)
         self.assertEqual(drop_y, 84.0)
+
+    def test_slime_boss_big_stage_splits_into_two_medium(self):
+        boss = SlimeBoss.__new__(SlimeBoss)
+        boss._position = (100.0, 200.0)
+        boss._velocity = (0.0, 0.0)
+        boss.drop_table = {}
+        boss.pending_item_drops = []
+        boss._death_drops_spawned = False
+        boss.pending_mob_spawns = []
+        boss._split_spawned = False
+        boss.split_stage = SlimeBoss.STAGE_BIG
+
+        with patch("mobs.mob.random.random", return_value=1.0), patch("mobs.mob.random.uniform", return_value=0.0):
+            boss.on_death()
+
+        self.assertEqual(len(boss.pending_mob_spawns), 2)
+        for mob_class, _x, _y, kwargs in boss.pending_mob_spawns:
+            self.assertIs(mob_class, SlimeBoss)
+            self.assertEqual(kwargs.get("split_stage"), SlimeBoss.STAGE_MEDIUM)
+
+    def test_slime_boss_medium_stage_splits_into_two_normal_slimes(self):
+        boss = SlimeBoss.__new__(SlimeBoss)
+        boss._position = (100.0, 200.0)
+        boss._velocity = (0.0, 0.0)
+        boss.drop_table = {}
+        boss.pending_item_drops = []
+        boss._death_drops_spawned = False
+        boss.pending_mob_spawns = []
+        boss._split_spawned = False
+        boss.split_stage = SlimeBoss.STAGE_MEDIUM
+
+        with patch("mobs.mob.random.random", return_value=1.0), patch("mobs.mob.random.uniform", return_value=0.0):
+            boss.on_death()
+
+        self.assertEqual(len(boss.pending_mob_spawns), 2)
+        for mob_class, _x, _y, _kwargs in boss.pending_mob_spawns:
+            self.assertIs(mob_class, Slime)
 
 if __name__ == "__main__":
     unittest.main()

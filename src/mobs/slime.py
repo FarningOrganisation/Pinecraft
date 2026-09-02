@@ -7,9 +7,11 @@ from paths import textures_dir
 from ids import CHARCOAL
 
 from mobs.monster import Monster
+from mobs.registry import register_mob
 from sprite_animation import SpriteAnimation
 
 
+@register_mob("Slime")
 class Slime(Monster):
     """A simple jumping slime that chases the player."""
     # TODO_STUDENT (⭐⭐⭐): BabySlime einfuehren und beim Tod grosser Slimes spawnen.
@@ -47,7 +49,7 @@ class Slime(Monster):
         self.scale = 2
         self.collision_width = self.width
         self.collision_height = self.height
-        self.current_state = "idle"
+        self.current_animation_state = "idle"
         self.jump_cooldown = 0.0
 
     def _reset_prep_cycle(self):
@@ -64,7 +66,7 @@ class Slime(Monster):
         self.change_y = self.jump_speed
         self.on_ground = False
         self.jump_phase = "air"
-        self.set_state("jump")
+        self.set_animation_state("jump")
 
     def _update_alerted_behavior(self, player, delta_time: float, *, speed: float | None = None):
         """Runs the 1-12 slime jump cycle while chasing the player."""
@@ -78,17 +80,17 @@ class Slime(Monster):
             if self.on_ground:
                 self.change_x = 0.0
                 self.jump_phase = "pre_jump"
-                self.set_state("prep")
+                self.set_animation_state("prep")
                 self._reset_prep_cycle()
             else:
                 # Horizontalimpuls in der Luft erneut anwenden, falls Kollision ihn auf 0 gesetzt hat.
                 self.change_x = self.jump_direction * self.jump_forward_speed
-                self.set_state("jump")
+                self.set_animation_state("jump")
             return
 
         self.change_x = 0.0
         self.jump_phase = "pre_jump"
-        self.set_state("prep")
+        self.set_animation_state("prep")
 
         prep_animation = self.animations.get("prep")
         if prep_animation is not None and prep_animation.has_finished:
@@ -98,7 +100,7 @@ class Slime(Monster):
         """Slimes do not wander; they either keep their jump arc or stay still."""
         if self.jump_phase == "air" and not self.on_ground:
             self.change_x = self.jump_direction * self.jump_forward_speed
-            self.set_state("jump")
+            self.set_animation_state("jump")
             return
 
         self.change_x = 0.0
@@ -110,7 +112,29 @@ class Slime(Monster):
         super().update_ai(delta_time, player)
 
         if self.jump_phase == "air" and not self.on_ground and self.stun_timer <= 0.0:
-            self.set_state("jump")
+            self.set_animation_state("jump")
         elif not self.alerted and self.on_ground:
             self.jump_phase = "idle"
-            self.set_state("idle")
+            self.set_animation_state("idle")
+
+    def save_state(self) -> dict:
+        """Persistiert slime-spezifischen Bewegungszustand."""
+        return {
+            "jump_phase": str(self.jump_phase),
+            "jump_direction": 1 if self.jump_direction >= 0 else -1,
+            "jump_cooldown": float(self.jump_cooldown),
+        }
+
+    def load_state(self, state: dict) -> None:
+        """Stellt slime-spezifischen Bewegungszustand wieder her."""
+        jump_phase = state.get("jump_phase", self.jump_phase)
+        if isinstance(jump_phase, str):
+            self.jump_phase = jump_phase
+        try:
+            self.jump_direction = 1 if int(state.get("jump_direction", self.jump_direction)) >= 0 else -1
+        except (TypeError, ValueError):
+            self.jump_direction = 1
+        try:
+            self.jump_cooldown = max(0.0, float(state.get("jump_cooldown", self.jump_cooldown)))
+        except (TypeError, ValueError):
+            self.jump_cooldown = 0.0

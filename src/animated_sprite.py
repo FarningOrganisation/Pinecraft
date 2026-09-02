@@ -29,7 +29,7 @@ class AnimatedSprite(arcade.Sprite):
         super().__init__()
         self.facing_right = facing_right
         self.animations: dict[str, SpriteAnimation] = {}
-        self.current_state = default_state
+        self.current_animation_state = default_state
         self.current_animation: SpriteAnimation | None = None
 
         if animations:
@@ -37,7 +37,7 @@ class AnimatedSprite(arcade.Sprite):
 
         if self.current_animation is None and self.animations:
             first_state = next(iter(self.animations))
-            self.set_state(first_state)
+            self.set_animation_state(first_state)
 
     def load_animations(
         self,
@@ -55,23 +55,23 @@ class AnimatedSprite(arcade.Sprite):
 
             self.animations[state_name] = animation
 
-        if self.current_state not in self.animations and self.animations:
-            self.current_state = next(iter(self.animations))
+        if self.current_animation_state not in self.animations and self.animations:
+            self.current_animation_state = next(iter(self.animations))
 
-        self.set_state(self.current_state)
+        self.set_animation_state(self.current_animation_state)
 
-    def set_state(self, state_name: str):
+    def set_animation_state(self, state_name: str):
         """Wechselt in einen neuen Animationszustand."""
         if state_name not in self.animations:
             return
 
-        if self.current_state == state_name:
-            self.current_state = state_name
+        if self.current_animation_state == state_name:
+            self.current_animation_state = state_name
             self.current_animation = self.animations[state_name]
             self.texture = self.current_animation.texture
             return
 
-        self.current_state = state_name
+        self.current_animation_state = state_name
         self.current_animation = self.animations[state_name]
         self.current_animation.reset()
         self.texture = self.current_animation.texture

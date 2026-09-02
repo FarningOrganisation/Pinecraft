@@ -141,18 +141,18 @@ class Monster(Mob):
                 self._update_attack_behavior(player, delta_time)
             move_state = self._preferred_move_state()
             if move_state is not None:
-                self.set_state(move_state)
+                self.set_animation_state(move_state)
             return
 
         self._update_unalerted_behavior(delta_time)
         if abs(self.change_x) > 0.1:
             move_state = self._preferred_move_state()
             if move_state is not None:
-                self.set_state(move_state)
+                self.set_animation_state(move_state)
         else:
             idle_state = self._preferred_idle_state()
             if idle_state is not None:
-                self.set_state(idle_state)
+                self.set_animation_state(idle_state)
 
     def update(self, delta_time: float, player=None):
         """Monster update: shared mob logic + attack contact damage."""

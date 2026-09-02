@@ -77,6 +77,62 @@ def _serialize_chunk_liquid(world, attr_name: str) -> dict[str, list[list[float]
     return payload
 
 
+def _serialize_mob_drop_table(mob) -> list[list[float]]:
+    """Serialisiert die Loot-Tabelle eines Mobs als JSON-freundliche Liste."""
+    raw_table = getattr(mob, "drop_table", {})
+    if not isinstance(raw_table, dict):
+        return []
+
+    payload: list[list[float]] = []
+    for entry_id, chance in sorted(raw_table.items()):
+        if not isinstance(entry_id, int):
+            continue
+        if not isinstance(chance, (int, float)):
+            continue
+        payload.append([int(entry_id), max(0.0, min(1.0, float(chance)))])
+    return payload
+
+
+def _serialize_mobs(game_view) -> list[dict]:
+    """Serialisiert aktive Mobs so, dass sie beim Laden erhalten bleiben."""
+    payload: list[dict] = []
+    for mob in getattr(game_view, "mobs", []):
+        should_save_fn = getattr(mob, "should_save", None)
+        if callable(should_save_fn):
+            try:
+                if not bool(should_save_fn()):
+                    continue
+            except Exception:
+                continue
+        elif not getattr(mob, "alive", True):
+            continue
+
+        serialize_fn = getattr(mob, "to_save_data", None)
+        if callable(serialize_fn):
+            mob_payload = serialize_fn()
+            if isinstance(mob_payload, dict):
+                payload.append(mob_payload)
+                continue
+
+        health = int(getattr(mob, "health", 1))
+        max_health = max(1, int(getattr(mob, "max_health", health)))
+        payload.append(
+            {
+                "mob_type": mob.__class__.__name__,
+                "position": {"x": float(getattr(mob, "center_x", 0.0)), "y": float(getattr(mob, "center_y", 0.0))},
+                "velocity": {"x": float(getattr(mob, "change_x", 0.0)), "y": float(getattr(mob, "change_y", 0.0))},
+                "health": max(0, min(max_health, health)),
+                "max_health": max_health,
+                "facing_right": bool(getattr(mob, "facing_right", True)),
+                "walk_direction": -1 if int(getattr(mob, "walk_direction", 1)) < 0 else 1,
+                "stun_timer": max(0.0, float(getattr(mob, "stun_timer", 0.0))),
+                "flee_timer": max(0.0, float(getattr(mob, "flee_timer", 0.0))),
+                "drop_table": _serialize_mob_drop_table(mob),
+            }
+        )
+    return payload
+
+
 def build_save_payload(game_view, runtime_state: dict | None = None) -> dict:
     world = game_view.world
     player = game_view.player
@@ -102,6 +158,7 @@ def build_save_payload(game_view, runtime_state: dict | None = None) -> dict:
             "changed_water": _serialize_chunk_liquid(world, "water"),
             "changed_lava": _serialize_chunk_liquid(world, "lava"),
             "items": placed_items,
+            "mobs": _serialize_mobs(game_view),
         },
         "player": {
             "position": {"x": float(player.center_x), "y": float(player.center_y)},

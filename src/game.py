@@ -25,6 +25,8 @@ from items import TORCH
 from mobs.mob_spawning import spawn_mob_at, spawn_mob_next_to_player
 from mobs.mob import Mob
 from mobs.chicken import Chicken
+from mobs.registry import get_registered_mob_class
+from mobs.slime_boss import SlimeBoss
 from mobs.slime import Slime
 from mobs.zombie import Zombie
 from lighting import LightingSystem
@@ -65,7 +67,7 @@ from world_generation import (
 from save_system import load_save, save_game
 
 # Choose the mob type spawned via the debug key from here instead of scrolling down.
-DEBUG_SPAWN_MOB_CLASS = Chicken
+DEBUG_SPAWN_MOB_CLASS = SlimeBoss
 
 
 class GameView(arcade.View):
@@ -1275,6 +1277,40 @@ class GameView(arcade.View):
             decoded[chunk_x] = chunk_liquid
         return decoded
 
+    def _restore_mobs_from_save(self, saved_mobs) -> None:
+        """Stellt gespeicherte Mobs wieder her."""
+        self.mobs = []
+        self.mob_sprite_list = arcade.SpriteList()
+
+        if not isinstance(saved_mobs, list):
+            return
+
+        for entry in saved_mobs:
+            if not isinstance(entry, dict):
+                continue
+
+            mob_type_name = str(entry.get("mob_type", "")).strip()
+            mob_class = get_registered_mob_class(mob_type_name)
+            if mob_class is None:
+                continue
+
+            try:
+                restore_fn = getattr(mob_class, "from_save_data", None)
+                if callable(restore_fn):
+                    mob = restore_fn(self.world, entry)
+                else:
+                    continue
+            except Exception:
+                continue
+
+            if not isinstance(mob, Mob):
+                continue
+            if not getattr(mob, "alive", True):
+                continue
+
+            self.mobs.append(mob)
+            self.mob_sprite_list.append(mob)
+
     def _restore_inventory_slots_from_save(self, save_slots) -> None:
         if not isinstance(save_slots, list):
             return
@@ -1327,6 +1363,8 @@ class GameView(arcade.View):
             placed_items[(world_x, tile_y)] = item_id
         self.world.placed_items = placed_items
         self.world.initialize_placed_item_runtime_state()
+
+        self._restore_mobs_from_save(world_data.get("mobs", []))
 
         spawn_data = world_data.get("spawn_point", {}) if isinstance(world_data, dict) else {}
         spawn_x = spawn_data.get("x") if isinstance(spawn_data, dict) else None
@@ -1630,6 +1668,7 @@ class GameView(arcade.View):
     def _update_mobs(self, delta_time: float):
         """Aktualisiert alle Mobs und entfernt tote Mobs erst nach dem Verfallszeitpunkt."""
         alive_mobs: list[Mob] = []
+        pending_mob_spawns: list[tuple[type[Mob], float, float, dict[str, Any]]] = []
         for mob in self.mobs:
             mob.update(delta_time, self.player)
 
@@ -1639,6 +1678,20 @@ class GameView(arcade.View):
                 if isinstance(pending_drops, list):
                     for entry_id, spawn_x, spawn_y in pending_drops:
                         self._spawn_dropped_item_at_world(entry_id, spawn_x, spawn_y)
+
+            consume_spawns = getattr(mob, "consume_pending_mob_spawns", None)
+            if callable(consume_spawns):
+                spawned = consume_spawns()
+                if isinstance(spawned, list):
+                    for entry in spawned:
+                        if not isinstance(entry, (list, tuple)) or len(entry) != 4:
+                            continue
+                        mob_class, spawn_x, spawn_y, mob_kwargs = entry
+                        if not isinstance(mob_class, type) or not issubclass(mob_class, Mob):
+                            continue
+                        if not isinstance(mob_kwargs, dict):
+                            mob_kwargs = {}
+                        pending_mob_spawns.append((mob_class, float(spawn_x), float(spawn_y), cast(dict[str, Any], mob_kwargs)))
 
             if not getattr(mob, "alive", True):
                 if getattr(mob, "vanish_after_death_timer", 0.0) <= 0.0:
@@ -1653,6 +1706,18 @@ class GameView(arcade.View):
             alive_mobs.append(mob)
 
         self.mobs = alive_mobs
+
+        if pending_mob_spawns and len(self.mobs) < self.max_active_mobs:
+            for mob_class, spawn_x, spawn_y, mob_kwargs in pending_mob_spawns:
+                if len(self.mobs) >= self.max_active_mobs:
+                    break
+                try:
+                    spawned = mob_class(self.world, x=spawn_x, y=spawn_y, **mob_kwargs)
+                except Exception:
+                    continue
+                self.mobs.append(spawned)
+                self.mob_sprite_list.append(spawned)
+
         self.mob_spawn_timer = max(0.0, self.mob_spawn_timer - delta_time)
         self._spawn_mob_if_needed()
 

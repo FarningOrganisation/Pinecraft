@@ -1,8 +1,10 @@
 from mobs.monster import Monster
+from mobs.registry import register_mob
 from paths import textures_dir
 from sprite_animation import SpriteAnimation
 from ids import STICK, STONE_SWORD
 
+@register_mob("Zombie")
 class Zombie(Monster):
 
     def __init__(self, world, x, y, drop_table: dict[int, float] | None = None):

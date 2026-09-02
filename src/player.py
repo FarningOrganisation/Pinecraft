@@ -94,7 +94,7 @@ class Player(AnimatedSprite):
         self.change_x = 0.0
         self.change_y = 0.0
         self.on_ground = True
-        self.state = self.current_state
+        self.state = self.current_animation_state
         self.scale_x = 1.0
         self.scale_y = 1.0
         self.inventory = Inventory({GRASS: 12, DIRT: 12, STONE: 12, SAND: 12})
@@ -194,7 +194,7 @@ class Player(AnimatedSprite):
         if self.world is not None:
             self.center_y = self.world.get_ground_top(int(self.center_x)) + self.height / 2 + 4
 
-    def set_state(self, state_name):
+    def set_animation_state(self, state_name):
         """Wechselt nur dann in einen neuen Zustand, wenn nicht gerade gegraben wird."""
         if state_name not in self.animations:
             return
@@ -205,11 +205,11 @@ class Player(AnimatedSprite):
         if self.is_attacking and state_name != "attacking":
             return
 
-        if self.current_state == state_name and self.current_animation is self.animations[state_name]:
+        if self.current_animation_state == state_name and self.current_animation is self.animations[state_name]:
             return
 
-        super().set_state(state_name)
-        self.state = self.current_state
+        super().set_animation_state(state_name)
+        self.state = self.current_animation_state
 
     def _set_mining_duration(self, duration_seconds: float):
         """Setzt die Dauer der Mining-Crack-Animation über ihre FPS."""
@@ -266,7 +266,7 @@ class Player(AnimatedSprite):
         self.attack_animation.reset()
         self.attack_animation.visible = True
         self._sync_attack_animation_position()
-        self.set_state("attacking")
+        self.set_animation_state("attacking")
 
     def finish_attack(self):
         """Beendet die Attack-Animation und setzt den Zustand zurück."""
@@ -339,7 +339,7 @@ class Player(AnimatedSprite):
 
     def _held_item_image_pose(self):
         """Liefert die aktive Held-Item-Pose in Bildkoordinaten."""
-        state_positions = self.held_item_positions.get(self.current_state)
+        state_positions = self.held_item_positions.get(self.current_animation_state)
         if not state_positions:
             state_positions = self.held_item_positions.get(
                 "idle",
@@ -687,15 +687,15 @@ class Player(AnimatedSprite):
             self.facing_right = True
 
         if self.is_mining:
-            self.set_state("mining")
+            self.set_animation_state("mining")
         elif self.is_attacking:
-            self.set_state("attacking")
+            self.set_animation_state("attacking")
         elif not self.on_ground and self.change_y > 10:
-            self.set_state("jumping")
+            self.set_animation_state("jumping")
         elif abs(self.change_x) > 0.1:
-            self.set_state("walking")
+            self.set_animation_state("walking")
         else:
-            self.set_state("idle")
+            self.set_animation_state("idle")
 
         super().update(delta_time)
 
@@ -706,7 +706,7 @@ class Player(AnimatedSprite):
         self.change_x = -self.get_horizontal_speed()
         self.facing_right = False
         self.scale_x = -1.0
-        self.set_state("walking")
+        self.set_animation_state("walking")
 
     def move_right(self):
         """Bewegt den Spieler nach rechts."""
@@ -715,7 +715,7 @@ class Player(AnimatedSprite):
         self.change_x = self.get_horizontal_speed()
         self.facing_right = True
         self.scale_x = 1.0
-        self.set_state("walking")
+        self.set_animation_state("walking")
 
     def stop_horizontal(self):
         """Stoppt die seitliche Bewegung."""
@@ -723,7 +723,7 @@ class Player(AnimatedSprite):
             return
         self.change_x = 0.0
         if self.on_ground:
-            self.set_state("idle")
+            self.set_animation_state("idle")
 
     def jump(self):
         """Lässt den Spieler springen, wenn er am Boden steht."""
@@ -732,7 +732,7 @@ class Player(AnimatedSprite):
         if self.on_ground:
             self.change_y = PLAYER_JUMP_SPEED
             self.on_ground = False
-            self.set_state("jumping")
+            self.set_animation_state("jumping")
 
     def get_horizontal_speed(self) -> float:
         """Liefert die seitliche Zielgeschwindigkeit, in Wasser verlangsamt."""
@@ -876,7 +876,7 @@ class Player(AnimatedSprite):
         self.is_mining = True
         self.mining_finished = False
         self.mining_animation.reset()
-        self.set_state("mining")
+        self.set_animation_state("mining")
 
     def cancel_mining(self):
         """Abbrechen des Mining-Vorgangs, wenn die Maustaste vorzeitig losgelassen wird."""
@@ -885,7 +885,7 @@ class Player(AnimatedSprite):
         self.mining_target = None
         self.mining_animation.reset()
         if self.on_ground:
-            self.set_state("idle")
+            self.set_animation_state("idle")
 
     def release_mining_result(self, world=None):
         """Bricht den Block nach dem fertig durchlaufenen Mining-Prozess."""

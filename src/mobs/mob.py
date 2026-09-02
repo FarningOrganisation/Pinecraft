@@ -5,11 +5,14 @@ from __future__ import annotations
 from animated_sprite import AnimatedSprite
 from blocks import AIR, is_block_solid
 from settings import GRAVITY, TILE_SIZE
+from typing import Callable, cast
 import random
 
 
 class Mob(AnimatedSprite):
     """Shared mob behavior for creature-like actors in the world."""
+
+    MOB_TYPE = "Mob"
 
     def __init__(
         self,
@@ -44,6 +47,8 @@ class Mob(AnimatedSprite):
         self.pending_item_drops: list[tuple[int, float, float]] = []
         self._death_drops_spawned = False
 
+        if self.current_animation is None or not self.current_animation.frames:
+            raise ValueError("Mob requires at least one animation frame")
         current_frame = self.current_animation.frames[0]
         self.width = current_frame.width
         self.height = current_frame.height
@@ -120,6 +125,117 @@ class Mob(AnimatedSprite):
                 continue
             sanitized[entry_id] = max(0.0, min(1.0, float(probability)))
         return sanitized
+
+    @staticmethod
+    def _decode_drop_table(raw_drop_table) -> dict[int, float]:
+        """Decodes saved drop tables from list or dict formats."""
+        if isinstance(raw_drop_table, dict):
+            return Mob._sanitize_drop_table(raw_drop_table)
+
+        if not isinstance(raw_drop_table, list):
+            return {}
+
+        decoded: dict[int, float] = {}
+        for entry in raw_drop_table:
+            if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+                continue
+            try:
+                entry_id = int(entry[0])
+                chance = float(entry[1])
+            except (TypeError, ValueError):
+                continue
+            decoded[entry_id] = max(0.0, min(1.0, chance))
+        return decoded
+
+    @staticmethod
+    def _encode_drop_table(drop_table: dict[int, float]) -> list[list[float]]:
+        """Encodes drop tables into a stable JSON-friendly list format."""
+        return [[int(entry_id), float(chance)] for entry_id, chance in sorted(drop_table.items())]
+
+    def save_state(self) -> dict:
+        """Hook for subclasses to persist extra state beyond the common mob fields."""
+        return {}
+
+    def should_save(self) -> bool:
+        """Hook: entscheidet, ob dieser Mob im Save landen soll."""
+        return bool(getattr(self, "alive", True))
+
+    def load_state(self, state: dict) -> None:
+        """Hook for subclasses to restore extra state from save data."""
+        return None
+
+    def to_save_data(self) -> dict:
+        """Serializes base mob state; subclasses can extend via save_state()."""
+        health = int(getattr(self, "health", 1))
+        max_health = max(1, int(getattr(self, "max_health", health)))
+        payload = {
+            "mob_type": str(getattr(self.__class__, "MOB_TYPE", self.__class__.__name__)),
+            "position": {
+                "x": float(getattr(self, "center_x", 0.0)),
+                "y": float(getattr(self, "center_y", 0.0)),
+            },
+            "velocity": {
+                "x": float(getattr(self, "change_x", 0.0)),
+                "y": float(getattr(self, "change_y", 0.0)),
+            },
+            "health": max(0, min(max_health, health)),
+            "max_health": max_health,
+            "facing_right": bool(getattr(self, "facing_right", True)),
+            "walk_direction": -1 if int(getattr(self, "walk_direction", 1)) < 0 else 1,
+            "stun_timer": max(0.0, float(getattr(self, "stun_timer", 0.0))),
+            "flee_timer": max(0.0, float(getattr(self, "flee_timer", 0.0))),
+            "current_animation_state": str(getattr(self, "current_animation_state", "")),
+            "drop_table": self._encode_drop_table(self.drop_table),
+        }
+
+        custom_state = self.save_state()
+        if isinstance(custom_state, dict) and custom_state:
+            payload["custom_state"] = custom_state
+        return payload
+
+    @classmethod
+    def from_save_data(cls, world, data: dict):
+        """Creates and restores a mob instance from save data."""
+        position = data.get("position", {}) if isinstance(data, dict) else {}
+        if not isinstance(position, dict):
+            position = {}
+
+        center_x = float(position.get("x", 0.0))
+        center_y = float(position.get("y", 0.0))
+        drop_table = cls._decode_drop_table(data.get("drop_table"))
+
+        create_mob = cast(Callable[..., Mob], cls)
+        mob = create_mob(world, x=center_x, y=center_y, drop_table=drop_table)
+        mob.apply_save_data(data)
+        return mob
+
+    def apply_save_data(self, data: dict) -> None:
+        """Applies common saved mob state to an existing instance."""
+        velocity = data.get("velocity", {}) if isinstance(data, dict) else {}
+        if not isinstance(velocity, dict):
+            velocity = {}
+
+        max_health = max(1, int(data.get("max_health", getattr(self, "max_health", 1))))
+        health = int(data.get("health", max_health))
+        self.max_health = max_health
+        self.health = max(0, min(max_health, health))
+        self.alive = self.health > 0
+
+        self.change_x = float(velocity.get("x", 0.0))
+        self.change_y = float(velocity.get("y", 0.0))
+        self.facing_right = bool(data.get("facing_right", True))
+        self.walk_direction = -1 if int(data.get("walk_direction", 1)) < 0 else 1
+        self.stun_timer = max(0.0, float(data.get("stun_timer", 0.0)))
+        self.flee_timer = max(0.0, float(data.get("flee_timer", 0.0)))
+        self.drop_table = self._decode_drop_table(data.get("drop_table"))
+
+        saved_state = data.get("current_animation_state")
+        if isinstance(saved_state, str) and saved_state in self.animations:
+            self.set_animation_state(saved_state)
+
+        custom_state = data.get("custom_state", {})
+        if isinstance(custom_state, dict):
+            self.load_state(custom_state)
 
     def consume_pending_item_drops(self) -> list[tuple[int, float, float]]:
         """Returns and clears queued world-space item drops."""
