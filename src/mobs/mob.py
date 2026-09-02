@@ -20,6 +20,7 @@ class Mob(AnimatedSprite):
         default_state,
         health: int = 3,
         speed: float = 90.0,
+        drop_table: dict[int, float] | None = None,
     ):
         super().__init__(animations=animations, default_state=default_state, facing_right=True)
 
@@ -39,6 +40,9 @@ class Mob(AnimatedSprite):
         self.walk_direction = 1
         self.jump_strength = 350.0
         self.alive = True
+        self.drop_table = self._sanitize_drop_table(drop_table)
+        self.pending_item_drops: list[tuple[int, float, float]] = []
+        self._death_drops_spawned = False
 
         current_frame = self.current_animation.frames[0]
         self.width = current_frame.width
@@ -78,8 +82,52 @@ class Mob(AnimatedSprite):
         self.on_ground = False
 
     def on_death(self):
-        """Hook for subclasses when the mob dies."""
+        """Queues item drops based on this mob's drop table."""
+        if self._death_drops_spawned:
+            return None
+
+        self._death_drops_spawned = True
+        if not self.drop_table:
+            return None
+
+        spawn_x = float(self.center_x)
+        spawn_y = float(self.center_y)
+        jitter = TILE_SIZE * 0.25
+
+        for entry_id, probability in self.drop_table.items():
+            if random.random() > probability:
+                continue
+            self.pending_item_drops.append(
+                (
+                    entry_id,
+                    spawn_x + random.uniform(-jitter, jitter),
+                    spawn_y + random.uniform(-jitter, jitter),
+                )
+            )
         return None
+
+    @staticmethod
+    def _sanitize_drop_table(drop_table: dict[int, float] | None) -> dict[int, float]:
+        """Normalizes drop chances to valid item IDs and probabilities in [0, 1]."""
+        if not isinstance(drop_table, dict):
+            return {}
+
+        sanitized: dict[int, float] = {}
+        for entry_id, probability in drop_table.items():
+            if not isinstance(entry_id, int):
+                continue
+            if not isinstance(probability, (int, float)):
+                continue
+            sanitized[entry_id] = max(0.0, min(1.0, float(probability)))
+        return sanitized
+
+    def consume_pending_item_drops(self) -> list[tuple[int, float, float]]:
+        """Returns and clears queued world-space item drops."""
+        if not self.pending_item_drops:
+            return []
+        pending = self.pending_item_drops
+        self.pending_item_drops = []
+        return pending
 
     def apply_physics(self, delta_time: float) -> bool:
         """Applies gravity and block collisions to this mob."""

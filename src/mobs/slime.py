@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import arcade
 from paths import textures_dir
+from ids import CHARCOAL
 
 from mobs.monster import Monster
 from sprite_animation import SpriteAnimation
@@ -13,7 +14,7 @@ class Slime(Monster):
     """A simple jumping slime that chases the player."""
     # TODO_STUDENT (⭐⭐⭐): BabySlime einfuehren und beim Tod grosser Slimes spawnen.
 
-    def __init__(self, world, x: float, y: float, health: int = 3):
+    def __init__(self, world, x: float, y: float, health: int = 3, drop_table: dict[int, float] | None = None):
         self.jump_speed = 560.0
         self.jump_forward_speed = 165.0
         self.jump_direction = 1
@@ -29,6 +30,7 @@ class Slime(Monster):
             "prep": SpriteAnimation(prep_textures, fps=14.0, loop=False),
             "jump": SpriteAnimation(jump_textures, fps=14.0, loop=False),
         }
+        loot_table = {CHARCOAL: 0.35} if drop_table is None else drop_table
         super().__init__(
             world,
             x=x,
@@ -39,6 +41,7 @@ class Slime(Monster):
             damage=1,
             animations=animations,
             default_state="idle",
+            drop_table=loot_table,
         )
 
         self.scale = 2

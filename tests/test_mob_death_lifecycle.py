@@ -2,10 +2,12 @@ import random
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from game import GameWindow
+from ids import STICK
 from mobs.mob import Mob
 from mobs.slime import Slime
 from mobs.zombie import Zombie
@@ -154,6 +156,24 @@ class MobDeathLifecycleTests(unittest.TestCase):
 
         self.assertEqual(mob.walk_direction, 1)
         self.assertGreater(mob.change_x, 0.0)
+
+    def test_mob_queues_drop_on_death_once(self):
+        mob = Mob.__new__(Mob)
+        mob._position = (42.0, 84.0)
+        mob._velocity = (0.0, 0.0)
+        mob.drop_table = {STICK: 1.0}
+        mob.pending_item_drops = []
+        mob._death_drops_spawned = False
+
+        with patch("mobs.mob.random.random", return_value=0.0), patch("mobs.mob.random.uniform", return_value=0.0):
+            mob.on_death()
+            mob.on_death()
+
+        self.assertEqual(len(mob.pending_item_drops), 1)
+        dropped_item_id, drop_x, drop_y = mob.pending_item_drops[0]
+        self.assertEqual(dropped_item_id, STICK)
+        self.assertEqual(drop_x, 42.0)
+        self.assertEqual(drop_y, 84.0)
 
 if __name__ == "__main__":
     unittest.main()

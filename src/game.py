@@ -20,7 +20,8 @@ from arcade.future.light import Light, LightLayer
 
 from blocks import AIR, BLOCK_TEXTURES, get_block_light_opacity, is_block_skylight_surface, is_block_solid
 from dropped_item import DroppedItem
-from items import ITEM_TEXTURES, TORCH
+from entry_textures import get_entry_texture
+from items import TORCH
 from mobs.mob_spawning import spawn_mob_at, spawn_mob_next_to_player
 from mobs.mob import Mob
 from mobs.chicken import Chicken
@@ -323,7 +324,7 @@ class GameView(arcade.View):
             if tile_y < min_tile_y or tile_y > max_tile_y:
                 continue
 
-            texture = ITEM_TEXTURES.get(item_id)
+            texture = get_entry_texture(item_id)
             if texture is None:
                 continue
 
@@ -746,6 +747,16 @@ class GameView(arcade.View):
             return
 
         spawn_x, spawn_y = self.world.to_world_position(tile_x, tile_y)
+        drop = DroppedItem(entry_id=entry_id, texture=texture, spawn_x=spawn_x, spawn_y=spawn_y)
+        self.dropped_items.append(drop)
+        self.dropped_item_sprite_list.append(drop.sprite)
+
+    def _spawn_dropped_item_at_world(self, entry_id: int, spawn_x: float, spawn_y: float):
+        """Erzeugt ein physisches Item an Weltkoordinaten."""
+        texture = get_entry_texture(entry_id)
+        if texture is None:
+            return
+
         drop = DroppedItem(entry_id=entry_id, texture=texture, spawn_x=spawn_x, spawn_y=spawn_y)
         self.dropped_items.append(drop)
         self.dropped_item_sprite_list.append(drop.sprite)
@@ -1621,6 +1632,13 @@ class GameView(arcade.View):
         alive_mobs: list[Mob] = []
         for mob in self.mobs:
             mob.update(delta_time, self.player)
+
+            consume_drops = getattr(mob, "consume_pending_item_drops", None)
+            if callable(consume_drops):
+                pending_drops = consume_drops()
+                if isinstance(pending_drops, list):
+                    for entry_id, spawn_x, spawn_y in pending_drops:
+                        self._spawn_dropped_item_at_world(entry_id, spawn_x, spawn_y)
 
             if not getattr(mob, "alive", True):
                 if getattr(mob, "vanish_after_death_timer", 0.0) <= 0.0:

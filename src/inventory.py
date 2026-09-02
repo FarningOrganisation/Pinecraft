@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from blocks import BLOCK_TEXTURES, BLOCKS
+from blocks import BLOCKS
+from entry_textures import get_entry_texture
 from ids import AIR, ITEM_ID_START
-from items import ITEMS, ITEM_TEXTURES, is_item_id
+from items import ITEMS, is_item_id
 
 
 @dataclass
@@ -160,11 +161,7 @@ class Inventory:
     @staticmethod
     def get_texture(entry_id):
         """Liefert die passende Texture für Block oder Item."""
-        if entry_id is None:
-            return None
-        if Inventory.is_item_id(entry_id):
-            return ITEM_TEXTURES.get(entry_id)
-        return BLOCK_TEXTURES.get(entry_id)
+        return get_entry_texture(entry_id)
 
     @property
     def hotbar(self):

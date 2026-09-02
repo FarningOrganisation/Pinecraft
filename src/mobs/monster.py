@@ -19,8 +19,18 @@ class Monster(Mob):
         attack_range: float | None = None,
         speed: float = 90.0,
         damage: int = 1,
+        drop_table: dict[int, float] | None = None,
     ):
-        super().__init__(world, x=x, y=y, health=health, speed=speed, animations=animations, default_state=default_state)
+        super().__init__(
+            world,
+            x=x,
+            y=y,
+            health=health,
+            speed=speed,
+            animations=animations,
+            default_state=default_state,
+            drop_table=drop_table,
+        )
         self.activate_range = activate_range
         self.aggro_duration = max(0.0, aggro_duration)
         self.aggro_timer = self.aggro_duration

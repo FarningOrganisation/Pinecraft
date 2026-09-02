@@ -8,6 +8,8 @@ from ids import (
     GRASS,
     CHARCOAL,
     DIAMOND,
+    EGG,
+    FEATHER,
     GOLD_INGOT,
     HAMMER,
     IRON_INGOT,
@@ -90,6 +92,20 @@ ITEMS = {
         "item_type": "material",
         "max_stack": 64,
     },
+    FEATHER: {
+        "item_id": FEATHER,
+        "name": "Feather",
+        "texture": "feather.png",
+        "item_type": "material",
+        "max_stack": 64,
+    },
+    EGG: {
+        "item_id": EGG,
+        "name": "Egg",
+        "texture": "egg.png",
+        "item_type": "material",
+        "max_stack": 64,
+    },
     TORCH: {
         "item_id": TORCH,
         "name": "Torch",
@@ -112,6 +128,7 @@ ITEMS = {
             "requires_surface_exposure_for_growth": True,
         },
     },
+    
 }
 
 TEXTURE_ROOT = textures_dir()
