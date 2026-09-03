@@ -7,11 +7,14 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from game import GameWindow
+from blocks import AIR, STONE
 from ids import STICK
 from mobs.mob import Mob
 from mobs.slime_boss import SlimeBoss
 from mobs.slime import Slime
 from mobs.zombie import Zombie
+from settings import TILE_SIZE
+from world import World
 
 
 class FakeMob:
@@ -37,6 +40,31 @@ class FakeSpriteList:
 
 
 class MobDeathLifecycleTests(unittest.TestCase):
+    @staticmethod
+    def _make_spawn_window() -> GameWindow:
+        window = GameWindow.__new__(GameWindow)
+        window.world = World(seed=1, load_radius=0, unload_radius=0)
+        window.world.update_loaded_chunks(0.5 * TILE_SIZE)
+        window.mobs = []
+        window.mob_sprite_list = FakeSpriteList()
+        window.max_active_mobs = 10
+        window.max_active_mobs_per_type = {}
+        window.max_active_mobs_per_category = {}
+        window.mob_spawn_category_by_type = {}
+        window.mob_pack_size_by_type = {}
+        window.player = type(
+            "PlayerStub",
+            (),
+            {
+                "center_x": 10_000.0,
+                "center_y": 10_000.0,
+                "collision_width": 28.0,
+                "collision_height": 64.0,
+            },
+        )()
+        window._day_factor = lambda: 0.0
+        return window
+
     def test_dead_mob_is_removed_after_death_timer_expires(self):
         window = GameWindow.__new__(GameWindow)
         mob = FakeMob(alive=False, vanish_after_death_timer=0.0)
@@ -63,6 +91,10 @@ class MobDeathLifecycleTests(unittest.TestCase):
         window = GameWindow.__new__(GameWindow)
         window.mobs = []
         window.max_active_mobs = 10
+        window.max_active_mobs_per_type = {}
+        window.max_active_mobs_per_category = {}
+        window.mob_spawn_category_by_type = {}
+        window.mob_pack_size_by_type = {}
         window.mob_spawn_timer = 0.0
         window.player = type("PlayerStub", (), {"center_x": 0.0, "center_y": 0.0})()
         window.world = type("WorldStub", (), {"get_ground_top": lambda self, x: 0.0})()
@@ -84,6 +116,146 @@ class MobDeathLifecycleTests(unittest.TestCase):
             random.choice = original_choice
 
         self.assertIn(Zombie, spawned_classes)
+
+    def test_can_spawn_rejects_one_tile_headroom(self):
+        window = self._make_spawn_window()
+
+        tile_x = 8
+        tile_y = 12
+        window.world.set_block(tile_x, tile_y - 1, STONE)
+        window.world.set_block(tile_x, tile_y, AIR)
+        window.world.set_block(tile_x, tile_y + 1, STONE)
+
+        spawn_x, spawn_y = window.world.to_world_position(tile_x, tile_y)
+        self.assertFalse(window._can_spawn_mob_at(spawn_x, spawn_y, ignore_player_distance=True))
+
+    def test_spawn_mob_rejects_physical_overlap_in_cramped_space(self):
+        window = self._make_spawn_window()
+
+        class TallDummyMob:
+            def __init__(self, world, x: float, y: float, **_kwargs):
+                self.world = world
+                self.center_x = x
+                self.center_y = y
+                self.collision_width = TILE_SIZE * 0.9
+                self.collision_height = TILE_SIZE * 2.0
+                self.width = self.collision_width
+                self.height = self.collision_height
+                self.alive = True
+
+        tile_x = 10
+        tile_y = 14
+        window.world.set_block(tile_x, tile_y - 1, STONE)
+        window.world.set_block(tile_x, tile_y, AIR)
+        window.world.set_block(tile_x, tile_y + 1, STONE)
+
+        spawn_x, spawn_y = window.world.to_world_position(tile_x, tile_y)
+        spawned = window.spawn_mob(TallDummyMob, spawn_x, spawn_y)
+
+        self.assertIsNone(spawned)
+        self.assertEqual(len(window.mobs), 0)
+
+    def test_spawn_mob_respects_per_type_cap(self):
+        window = self._make_spawn_window()
+
+        class CappedDummyMob:
+            created = 0
+
+            def __init__(self, world, x: float, y: float, **_kwargs):
+                CappedDummyMob.created += 1
+                self.world = world
+                self.center_x = x
+                self.center_y = y
+                self.collision_width = TILE_SIZE * 0.9
+                self.collision_height = TILE_SIZE * 1.9
+                self.width = self.collision_width
+                self.height = self.collision_height
+                self.alive = True
+
+        window.max_active_mobs_per_type = {CappedDummyMob: 1}
+
+        existing = CappedDummyMob(window.world, 40.0, 200.0)
+        window.mobs.append(existing)
+        window.mob_sprite_list.append(existing)
+
+        spawned = window.spawn_mob(CappedDummyMob, 80.0, 200.0)
+
+        self.assertIsNone(spawned)
+        self.assertEqual(CappedDummyMob.created, 1)
+
+    def test_spawn_mob_respects_category_cap(self):
+        window = self._make_spawn_window()
+
+        class HostileA:
+            def __init__(self, world, x: float, y: float, **_kwargs):
+                self.world = world
+                self.center_x = x
+                self.center_y = y
+                self.collision_width = TILE_SIZE * 0.9
+                self.collision_height = TILE_SIZE * 1.9
+                self.width = self.collision_width
+                self.height = self.collision_height
+                self.alive = True
+
+        class HostileB:
+            created = 0
+
+            def __init__(self, world, x: float, y: float, **_kwargs):
+                HostileB.created += 1
+                self.world = world
+                self.center_x = x
+                self.center_y = y
+                self.collision_width = TILE_SIZE * 0.9
+                self.collision_height = TILE_SIZE * 1.9
+                self.width = self.collision_width
+                self.height = self.collision_height
+                self.alive = True
+
+        window.mob_spawn_category_by_type = {
+            HostileA: "hostile",
+            HostileB: "hostile",
+        }
+        window.max_active_mobs_per_category = {"hostile": 1}
+
+        existing = HostileA(window.world, 40.0, 200.0)
+        window.mobs.append(existing)
+        window.mob_sprite_list.append(existing)
+
+        spawned = window.spawn_mob(HostileB, 80.0, 200.0)
+
+        self.assertIsNone(spawned)
+        self.assertEqual(HostileB.created, 0)
+
+    def test_natural_spawn_attempt_can_spawn_pack(self):
+        window = GameWindow.__new__(GameWindow)
+        window.mobs = []
+        window.max_active_mobs = 10
+        window.max_active_mobs_per_type = {}
+        window.max_active_mobs_per_category = {}
+        window.mob_spawn_category_by_type = {}
+        window.mob_pack_size_by_type = {Zombie: (3, 3)}
+        window.mob_spawn_timer = 0.0
+        window.player = type("PlayerStub", (), {"center_x": 0.0, "center_y": 0.0})()
+        window.world = type("WorldStub", (), {"get_ground_top": lambda self, x: 0.0})()
+        window._day_factor = lambda: 0.0
+        window._can_spawn_mob_at = lambda *args, **kwargs: True
+
+        spawned_calls: list[type] = []
+
+        def fake_spawn_mob(mob_class, x, y, **kwargs):
+            spawned_calls.append(mob_class)
+            return object()
+
+        window.spawn_mob = fake_spawn_mob
+
+        with patch("game.random.choice", return_value=Zombie), patch("game.random.randint", return_value=3), patch(
+            "game.random.uniform", return_value=0.0
+        ):
+            window._spawn_mob_if_needed()
+
+        self.assertEqual(len(spawned_calls), 3)
+        self.assertTrue(all(spawned is Zombie for spawned in spawned_calls))
+        self.assertGreater(window.mob_spawn_timer, 5.0)
 
     def test_dead_slime_counts_down_vanish_timer(self):
         slime = Slime.__new__(Slime)

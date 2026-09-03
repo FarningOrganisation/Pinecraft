@@ -22,7 +22,7 @@ from blocks import AIR, BLOCK_TEXTURES, get_block_light_opacity, is_block_skylig
 from dropped_item import DroppedItem
 from entry_textures import get_entry_texture
 from items import TORCH
-from mobs.mob_spawning import spawn_mob_at, spawn_mob_next_to_player
+from mobs.mob_spawning import spawn_mob_next_to_player
 from mobs.mob import Mob
 from mobs.chicken import Chicken
 from mobs.registry import get_registered_mob_class
@@ -101,6 +101,28 @@ class GameView(arcade.View):
         self.mobs: list[Mob] = []
         self.mob_spawn_timer = 0.0
         self.max_active_mobs = 5
+        self.max_active_mobs_per_type: dict[type[Mob], int] = {
+            Chicken: 3,
+            Slime: 3,
+            Zombie: 3,
+            SlimeBoss: 2,
+        }
+        self.max_active_mobs_per_category: dict[str, int] = {
+            "passive": 4,
+            "hostile": 4,
+            "boss": 1,
+        }
+        self.mob_spawn_category_by_type: dict[type[Mob], str] = {
+            Chicken: "passive",
+            Slime: "hostile",
+            Zombie: "hostile",
+            SlimeBoss: "boss",
+        }
+        self.mob_pack_size_by_type: dict[type[Mob], tuple[int, int]] = {
+            Chicken: (1, 2),
+            Slime: (1, 2),
+            Zombie: (1, 3),
+        }
         self.hotbar = Hotbar(self.player)
         self.health_ui = HealthUI(self.player, self.hotbar)
         self.bubble_ui = BubbleUI(self.player, self.hotbar, self.health_ui)
@@ -1414,15 +1436,149 @@ class GameView(arcade.View):
             print("[mob-spawn] skipped: max mob count reached")
             return None
 
-        return spawn_mob_at(
-            self.world,
-            mob_class,
-            self.mobs,
-            self.mob_sprite_list,
-            x=x,
-            y=y,
-            **mob_kwargs,
+        if not self._can_spawn_more_of_type(mob_class):
+            return None
+
+        try:
+            mob = mob_class(self.world, x=x, y=y, **mob_kwargs)
+        except Exception:
+            return None
+
+        if not self._has_spawn_space_for_mob(mob):
+            print(f"[mob-spawn] skipped: no physical space for {mob.__class__.__name__}")
+            return None
+
+        self.mobs.append(mob)
+        self.mob_sprite_list.append(mob)
+        print(f"[mob-spawn] {mob.__class__.__name__} x={x:.1f} y={y:.1f}")
+        return mob
+
+    @staticmethod
+    def _world_tile_is_loaded(world: World, tile_x: int) -> bool:
+        """True, wenn die Tile-Spalte in einem bereits geladenen Chunk liegt."""
+        chunk_x, _local_x = world_to_chunk_and_local(tile_x)
+        return chunk_x in world.chunks
+
+    def _mob_spawn_category_for_type(self, mob_class: type) -> str:
+        """Liefert die Spawn-Kategorie fuer eine Mob-Klasse."""
+        category_map = getattr(self, "mob_spawn_category_by_type", {})
+        category = category_map.get(mob_class)
+        if isinstance(category, str) and category.strip():
+            return category.strip().lower()
+        return "misc"
+
+    def _alive_mob_count_of_type(self, mob_class: type) -> int:
+        """Zählt lebende Mobs einer konkreten Klasse."""
+        return sum(1 for mob in self.mobs if getattr(mob, "alive", True) and type(mob) is mob_class)
+
+    def _alive_mob_count_of_category(self, category: str) -> int:
+        """Zählt lebende Mobs einer Spawn-Kategorie."""
+        target = str(category).strip().lower()
+        if not target:
+            return 0
+        return sum(
+            1
+            for mob in self.mobs
+            if getattr(mob, "alive", True) and self._mob_spawn_category_for_type(type(mob)) == target
         )
+
+    def _can_spawn_more_of_type(self, mob_class: type) -> bool:
+        """Prüft globale, per-Type und per-Kategorie Spawn-Limits."""
+        per_type_limits = getattr(self, "max_active_mobs_per_type", {})
+        per_type_limit = per_type_limits.get(mob_class)
+        if per_type_limit is not None:
+            alive_of_type = self._alive_mob_count_of_type(mob_class)
+            if alive_of_type >= per_type_limit:
+                print(f"[mob-spawn] skipped: {mob_class.__name__} cap reached ({per_type_limit})")
+                return False
+
+        category_limits = getattr(self, "max_active_mobs_per_category", {})
+        category = self._mob_spawn_category_for_type(mob_class)
+        category_limit = category_limits.get(category)
+        if category_limit is not None:
+            alive_in_category = self._alive_mob_count_of_category(category)
+            if alive_in_category >= category_limit:
+                print(f"[mob-spawn] skipped: category '{category}' cap reached ({category_limit})")
+                return False
+
+        return True
+
+    def _has_spawn_space_for_mob(self, mob: Mob) -> bool:
+        """Prüft, ob die volle Mob-Hitbox in freie Luft passt und auf festem Boden steht."""
+        width = max(1.0, float(getattr(mob, "collision_width", getattr(mob, "width", TILE_SIZE))))
+        height = max(1.0, float(getattr(mob, "collision_height", getattr(mob, "height", TILE_SIZE))))
+        half_w = width / 2.0
+        half_h = height / 2.0
+
+        left = float(mob.center_x - half_w)
+        right = float(mob.center_x + half_w)
+        bottom = float(mob.center_y - half_h)
+        top = float(mob.center_y + half_h)
+
+        min_tile_x = int(math.floor(left / TILE_SIZE))
+        max_tile_x = int(math.floor((right - 1e-6) / TILE_SIZE))
+        min_tile_y = int(math.floor(bottom / TILE_SIZE))
+        max_tile_y = int(math.floor((top - 1e-6) / TILE_SIZE))
+
+        if min_tile_y < 1 or max_tile_y >= WORLD_HEIGHT:
+            return False
+
+        for tile_x in range(min_tile_x, max_tile_x + 1):
+            if not self._world_tile_is_loaded(self.world, tile_x):
+                return False
+            for tile_y in range(min_tile_y, max_tile_y + 1):
+                block_id = self.world.get_block(tile_x, tile_y, generate_if_missing=False)
+                if block_id != AIR and is_block_solid(block_id):
+                    return False
+
+        support_y = min_tile_y - 1
+        has_support = False
+        for tile_x in range(min_tile_x, max_tile_x + 1):
+            below = self.world.get_block(tile_x, support_y, generate_if_missing=False)
+            if below != AIR and is_block_solid(below):
+                has_support = True
+                break
+        if not has_support:
+            return False
+
+        mob_aabb = (
+            mob.center_x - width / 2,
+            mob.center_x + width / 2,
+            mob.center_y - height / 2,
+            mob.center_y + height / 2,
+        )
+        for other in self.mobs:
+            if not getattr(other, "alive", True):
+                continue
+            other_aabb = (
+                other.center_x - other.collision_width / 2,
+                other.center_x + other.collision_width / 2,
+                other.center_y - other.collision_height / 2,
+                other.center_y + other.collision_height / 2,
+            )
+            if aabb_overlap(mob_aabb, other_aabb):
+                return False
+
+        player_cx = getattr(self.player, "center_x", None)
+        player_cy = getattr(self.player, "center_y", None)
+        player_cw = float(getattr(self.player, "collision_width", getattr(self.player, "width", 0.0)))
+        player_ch = float(getattr(self.player, "collision_height", getattr(self.player, "height", 0.0)))
+        if (
+            isinstance(player_cx, (int, float))
+            and isinstance(player_cy, (int, float))
+            and player_cw > 0.0
+            and player_ch > 0.0
+        ):
+            player_aabb = (
+                float(player_cx) - player_cw / 2,
+                float(player_cx) + player_cw / 2,
+                float(player_cy) - player_ch / 2,
+                float(player_cy) + player_ch / 2,
+            )
+            if aabb_overlap(mob_aabb, player_aabb):
+                return False
+
+        return True
 
     def on_update(self, delta_time: float):
         """Wird regelmäßig pro Frame aufgerufen."""
@@ -1609,14 +1765,18 @@ class GameView(arcade.View):
         return tile_x, tile_y, item_id
 
     def _can_spawn_mob_at(self, world_x: float, world_y: float, ignore_player_distance: bool = False) -> bool:
-        """Prüft, ob an dieser Position ein Slime zuverlässig spawnen darf."""
+        """Prüft Basisregeln für natürliche Spawnkandidaten (Licht, Distanz, Boden, Headroom)."""
         tile_x = int(world_x // TILE_SIZE)
         tile_y = int(world_y // TILE_SIZE)
         if tile_y < 1 or tile_y >= 220:
             return False
-        if self.world.get_block(tile_x, tile_y, generate_if_missing=False) != 0:
+        if not self._world_tile_is_loaded(self.world, tile_x):
             return False
-        if self.world.get_block(tile_x, tile_y - 1, generate_if_missing=False) == 0:
+        if self.world.get_block(tile_x, tile_y, generate_if_missing=False) != AIR:
+            return False
+        if self.world.get_block(tile_x, tile_y + 1, generate_if_missing=False) != AIR:
+            return False
+        if self.world.get_block(tile_x, tile_y - 1, generate_if_missing=False) == AIR:
             return False
 
         if not ignore_player_distance and abs(world_x - self.player.center_x) < 600.0:
@@ -1648,21 +1808,62 @@ class GameView(arcade.View):
         if is_night:
             spawn_pool = [Slime, Zombie, Chicken]
 
+        spawn_pool = [
+            mob_class
+            for mob_class in spawn_pool
+            if self._can_spawn_more_of_type(mob_class)
+        ]
+        if not spawn_pool:
+            return
+
+        pack_size_map = getattr(self, "mob_pack_size_by_type", {})
+
         for _ in range(24):
             mob_class = random.choice(spawn_pool)
             angle = random.uniform(0.0, 2.0 * math.pi)
             distance = random.uniform(700.0, 1800.0)
-            spawn_x = self.player.center_x + math.cos(angle) * distance
-            spawn_tile_x = int(spawn_x // TILE_SIZE)
-            ground_y = self.world.get_ground_top(spawn_tile_x)
-            spawn_y = ground_y + 14.0
+            anchor_x = self.player.center_x + math.cos(angle) * distance
+            anchor_tile_x = int(anchor_x // TILE_SIZE)
+            anchor_ground_y = self.world.get_ground_top(anchor_tile_x)
+            anchor_y = anchor_ground_y + 14.0
 
-            if not self._can_spawn_mob_at(spawn_x, spawn_y):
+            if not self._can_spawn_mob_at(anchor_x, anchor_y):
                 continue
 
-            spawned = self.spawn_mob(mob_class, spawn_x, spawn_y)
-            if spawned is not None:
-                self.mob_spawn_timer = 3.0 if mob_class is Slime else 5.0
+            pack_min, pack_max = pack_size_map.get(mob_class, (1, 1))
+            pack_min = max(1, int(pack_min))
+            pack_max = max(pack_min, int(pack_max))
+            pack_target = random.randint(pack_min, pack_max)
+            spawned_count = 0
+
+            for index in range(pack_target):
+                if len(self.mobs) >= self.max_active_mobs:
+                    break
+                if not self._can_spawn_more_of_type(mob_class):
+                    break
+
+                if index == 0:
+                    spawn_x = anchor_x
+                    spawn_y = anchor_y
+                else:
+                    spread = random.uniform(24.0, 120.0)
+                    spread_angle = random.uniform(0.0, 2.0 * math.pi)
+                    spawn_x = anchor_x + math.cos(spread_angle) * spread
+                    spawn_tile_x = int(spawn_x // TILE_SIZE)
+                    ground_y = self.world.get_ground_top(spawn_tile_x)
+                    spawn_y = ground_y + 14.0
+
+                if not self._can_spawn_mob_at(spawn_x, spawn_y):
+                    continue
+
+                spawned = self.spawn_mob(mob_class, spawn_x, spawn_y)
+                if spawned is None:
+                    continue
+                spawned_count += 1
+
+            if spawned_count > 0:
+                base_cooldown = 3.0 if mob_class is Slime else 5.0
+                self.mob_spawn_timer = base_cooldown + 0.6 * max(0, spawned_count - 1)
                 return
 
     def _update_mobs(self, delta_time: float):
@@ -1711,12 +1912,7 @@ class GameView(arcade.View):
             for mob_class, spawn_x, spawn_y, mob_kwargs in pending_mob_spawns:
                 if len(self.mobs) >= self.max_active_mobs:
                     break
-                try:
-                    spawned = mob_class(self.world, x=spawn_x, y=spawn_y, **mob_kwargs)
-                except Exception:
-                    continue
-                self.mobs.append(spawned)
-                self.mob_sprite_list.append(spawned)
+                self.spawn_mob(mob_class, spawn_x, spawn_y, **mob_kwargs)
 
         self.mob_spawn_timer = max(0.0, self.mob_spawn_timer - delta_time)
         self._spawn_mob_if_needed()
