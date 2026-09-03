@@ -29,7 +29,7 @@ class BubbleUI(arcade.gui.UIWidget):
 
     def _bubble_row_geometry(self) -> tuple[float, float, float, float, int]:
         """Liefert (x, y, width, height, bubble_count) der Bubble-Leiste."""
-        bubble_count = max(0, int(getattr(self.player, "max_air_bubbles", 0)))
+        bubble_count = max(0, int(self.player.max_air_bubbles))
         row_width = 0 if bubble_count <= 0 else bubble_count * self.bubble_size + (bubble_count - 1) * self.bubble_gap
         row_height = self.bubble_size
         start_x, hearts_y = self.health_ui.get_bar_origin()
@@ -75,16 +75,16 @@ class BubbleUI(arcade.gui.UIWidget):
 
     def draw(self):
         """Draws the bubble row only while the player is inside water."""
-        if not bool(getattr(self.player, "in_water", False)):
+        if not self.player.in_water:
             self._last_remaining = None
             self._pop_visible_until.clear()
             return
 
-        bubble_count = max(0, int(getattr(self.player, "max_air_bubbles", 0)))
+        bubble_count = max(0, int(self.player.max_air_bubbles))
         if bubble_count <= 0:
             return
 
-        remaining = max(0, int(getattr(self.player, "air_bubbles", 0)))
+        remaining = max(0, int(self.player.air_bubbles))
         now = time.monotonic()
         self._update_pop_state(remaining, bubble_count, now)
 

@@ -29,12 +29,12 @@ class HealthUI(arcade.gui.UIWidget):
 
     def draw(self):
         """Zeichnet die Lebenspunkte als Herzreihe."""
-        heart_count = max(0, int(getattr(self.player, "max_health", 0)))
+        heart_count = max(0, int(self.player.max_health))
         if heart_count <= 0:
             return
 
         start_x, start_y = self.get_bar_origin()
-        current_health = max(0, int(getattr(self.player, "health", 0)))
+        current_health = max(0, int(self.player.health))
 
         for index in range(heart_count):
             texture = self.heart_full_texture if index < current_health else self.heart_empty_texture

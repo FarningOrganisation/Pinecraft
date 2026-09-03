@@ -1,6 +1,6 @@
 """Load-World-View fuer Pinecraft."""
 
-from dataclasses import replace
+from copy import copy
 from datetime import datetime
 
 import arcade
@@ -179,9 +179,9 @@ class LoadWorldView(arcade.View):
     def _new_entry_button_style(self) -> dict[str, object]:
         if self._entry_button_style_template is None:
             probe = arcade.gui.UIFlatButton(text="", width=1, height=1)
-            self._entry_button_style_template = {key: replace(value) for key, value in probe.style.items()}
+            self._entry_button_style_template = {key: copy(value) for key, value in probe.style.items()}
 
-        return {key: replace(value) for key, value in self._entry_button_style_template.items()}
+        return {key: copy(value) for key, value in self._entry_button_style_template.items()}
 
     @staticmethod
     def _apply_entry_button_style(button: arcade.gui.UIFlatButton, selected: bool) -> None:
@@ -240,7 +240,7 @@ class LoadWorldView(arcade.View):
             if entry is None:
                 raise FileNotFoundError("Save file not found")
 
-            save_data = load_save(entry["path"])
+            save_data = load_save(str(entry["path"]))
             world_data = save_data.get("world", {})
             meta_data = save_data.get("meta", {})
             seed = int(world_data.get("seed"))

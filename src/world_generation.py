@@ -32,7 +32,7 @@ from sand import slide_decision_signature as sand_slide_decision_signature
 from sand import slide_probability as sand_slide_probability
 from settings import CHUNK_WIDTH, TILE_SIZE, WORLD_HEIGHT
 from tree import build_oak_tree_layout, oak_trunk_height
-from world import World, world_to_chunk_and_local
+from world import Chunk, World, world_to_chunk_and_local
 from world_gen_config import (
     DEFAULT_WORLD_GEN_CONFIG,
     BiomeDefinition,

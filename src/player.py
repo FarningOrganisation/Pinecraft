@@ -348,7 +348,7 @@ class Player(AnimatedSprite):
 
         frame_index = 0
         if self.current_animation is not None:
-            frame_index = getattr(self.current_animation, "frame_index", 0)
+            frame_index = self.current_animation.frame_index
 
         if frame_index >= len(state_positions):
             frame_index = len(state_positions) - 1

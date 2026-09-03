@@ -158,7 +158,7 @@ class Mob(AnimatedSprite):
 
     def should_save(self) -> bool:
         """Hook: entscheidet, ob dieser Mob im Save landen soll."""
-        return bool(getattr(self, "alive", True))
+        return self.alive
 
     def load_state(self, state: dict) -> None:
         """Hook for subclasses to restore extra state from save data."""
@@ -166,25 +166,25 @@ class Mob(AnimatedSprite):
 
     def to_save_data(self) -> dict:
         """Serializes base mob state; subclasses can extend via save_state()."""
-        health = int(getattr(self, "health", 1))
-        max_health = max(1, int(getattr(self, "max_health", health)))
+        health = int(self.health)
+        max_health = max(1, int(self.max_health))
         payload = {
-            "mob_type": str(getattr(self.__class__, "MOB_TYPE", self.__class__.__name__)),
+            "mob_type": str(self.MOB_TYPE),
             "position": {
-                "x": float(getattr(self, "center_x", 0.0)),
-                "y": float(getattr(self, "center_y", 0.0)),
+                "x": float(self.center_x),
+                "y": float(self.center_y),
             },
             "velocity": {
-                "x": float(getattr(self, "change_x", 0.0)),
-                "y": float(getattr(self, "change_y", 0.0)),
+                "x": float(self.change_x),
+                "y": float(self.change_y),
             },
             "health": max(0, min(max_health, health)),
             "max_health": max_health,
-            "facing_right": bool(getattr(self, "facing_right", True)),
-            "walk_direction": -1 if int(getattr(self, "walk_direction", 1)) < 0 else 1,
-            "stun_timer": max(0.0, float(getattr(self, "stun_timer", 0.0))),
-            "flee_timer": max(0.0, float(getattr(self, "flee_timer", 0.0))),
-            "current_animation_state": str(getattr(self, "current_animation_state", "")),
+            "facing_right": bool(self.facing_right),
+            "walk_direction": -1 if int(self.walk_direction) < 0 else 1,
+            "stun_timer": max(0.0, float(self.stun_timer)),
+            "flee_timer": max(0.0, float(self.flee_timer)),
+            "current_animation_state": str(self.current_animation_state),
             "drop_table": self._encode_drop_table(self.drop_table),
         }
 

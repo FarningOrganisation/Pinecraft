@@ -283,31 +283,41 @@ class GameView(arcade.View):
 
     def _lerp_color(self, a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
         """Wrapper to the lighting system implementation."""
-        return self.lighting.lerp_color(a, b, t)
+        return self._require_lighting().lerp_color(a, b, t)
 
     def _day_factor(self) -> float:
         """Wrapper to the lighting system implementation."""
-        return self.lighting.day_factor()
+        return self._require_lighting().day_factor()
 
     def _sky_color(self) -> tuple[int, int, int, int]:
         """Wrapper to the lighting system implementation."""
-        return self.lighting.sky_color()
+        return self._require_lighting().sky_color()
 
     def _is_sky_lit_air(self, tile_x: int, tile_y: int, max_scan: int = 18) -> bool:
         """Wrapper to the lighting system implementation."""
-        return self.lighting.is_sky_lit_air(tile_x, tile_y, max_scan=max_scan)
+        return self._require_lighting().is_sky_lit_air(tile_x, tile_y, max_scan=max_scan)
 
     def _sky_background_blend(self) -> float:
         """Wrapper to the lighting system implementation."""
-        return self.lighting.sky_background_blend()
+        return self._require_lighting().sky_background_blend()
 
     def _ambient_color(self) -> tuple[int, int, int]:
         """Wrapper to the lighting system implementation."""
-        return self.lighting.ambient_color()
+        return self._require_lighting().ambient_color()
 
     def _draw_sky_shader(self):
         """Wrapper to the lighting system implementation."""
-        self.lighting.draw_sky_shader()
+        self._require_lighting().draw_sky_shader()
+
+    def _require_lighting(self) -> LightingSystem:
+        """Gibt das nach der View-Initialisierung verfügbare Lichtsystem zurück."""
+        assert self.lighting is not None
+        return self.lighting
+
+    def _require_light_layer(self) -> LightLayer:
+        """Gibt die nach der View-Initialisierung verfügbare Licht-Ebene zurück."""
+        assert self.light_layer is not None
+        return self.light_layer
 
     def _is_torch_equipped(self) -> bool:
         """True, wenn der aktuell ausgewählte Hotbar-Slot eine Fackel enthält."""
@@ -610,7 +620,7 @@ class GameView(arcade.View):
         hit_direction = 1 if self.player.facing_right else -1
 
         for mob in self.mobs:
-            if not getattr(mob, "alive", True):
+            if not mob.alive:
                 continue
 
             mob_id = id(mob)
@@ -633,6 +643,10 @@ class GameView(arcade.View):
 
     def _sync_torch_lights(self):
         """Synchronisiert Spieler-/Welt-Fackeln und gesampelte Lava-Lichter mit dem aktuellen Zustand."""
+        light_layer = self._require_light_layer()
+        lighting = self._require_lighting()
+        assert self.player_torch_light is not None
+
         if self._is_torch_equipped():
             light_pos = self.player.get_equipped_light_source_position()
             if light_pos is None:
@@ -649,7 +663,7 @@ class GameView(arcade.View):
 
         for tile_pos in existing_torch_tiles - current_torch_tiles:
             light = self.placed_torch_lights.pop(tile_pos)
-            self.light_layer.remove(light)
+            light_layer.remove(light)
 
         for tile_pos in current_torch_tiles:
             light = self.placed_torch_lights.get(tile_pos)
@@ -658,20 +672,20 @@ class GameView(arcade.View):
             radius = 165.0 * tile_scale
             if light is None:
                 light = Light(light_x, light_y, radius=radius, color=self.torch_light_color, mode="soft")
-                self.light_layer.add(light)
+                light_layer.add(light)
                 self.placed_torch_lights[tile_pos] = light
             else:
                 light.position = (light_x, light_y)
                 light.radius = radius
                 setattr(light, "color", self.torch_light_color)
 
-        lava_samples = self.lighting.collect_visible_lava_light_samples()
+        lava_samples = lighting.collect_visible_lava_light_samples()
         current_lava_tiles = {(sample.tile_x, sample.tile_y) for sample in lava_samples}
         existing_lava_tiles = set(self.sampled_lava_lights.keys())
 
         for tile_pos in existing_lava_tiles - current_lava_tiles:
             light = self.sampled_lava_lights.pop(tile_pos)
-            self.light_layer.remove(light)
+            light_layer.remove(light)
 
         for sample in lava_samples:
             tile_pos = (sample.tile_x, sample.tile_y)
@@ -685,7 +699,7 @@ class GameView(arcade.View):
 
             if light is None:
                 light = Light(sample.world_x, sample.world_y, radius=sample.radius, color=color, mode="soft")
-                self.light_layer.add(light)
+                light_layer.add(light)
                 self.sampled_lava_lights[tile_pos] = light
             else:
                 light.position = (sample.world_x, sample.world_y)
@@ -694,7 +708,7 @@ class GameView(arcade.View):
 
     def _torch_daylight_multiplier(self, world_x: float, world_y: float) -> float:
         """Wrapper to the lighting system implementation."""
-        return self.lighting.torch_daylight_multiplier(world_x, world_y)
+        return self._require_lighting().torch_daylight_multiplier(world_x, world_y)
 
     def _has_sky_access(self, world_x: float, world_y: float, max_scan: int = 18) -> bool:
         """Wrapper to the lighting system implementation."""
@@ -709,11 +723,11 @@ class GameView(arcade.View):
 
     def _column_surface_and_shadow(self, tile_x: int) -> tuple[int, float]:
         """Wrapper to the lighting system implementation."""
-        return self.lighting._column_surface_and_shadow(tile_x)
+        return self._require_lighting()._column_surface_and_shadow(tile_x)
 
     def _torch_shadow_positions(self) -> list[tuple[int, int]]:
         """Wrapper to the lighting system implementation."""
-        return self.lighting._torch_shadow_positions()
+        return self._require_lighting()._torch_shadow_positions()
 
     def _compute_connected_sky_light(
         self,
@@ -723,11 +737,11 @@ class GameView(arcade.View):
         max_tile_y: int,
     ) -> dict[tuple[int, int], float]:
         """Wrapper to the lighting system implementation."""
-        return self.lighting._compute_connected_sky_light(min_tile_x, max_tile_x, min_tile_y, max_tile_y)
+        return self._require_lighting()._compute_connected_sky_light(min_tile_x, max_tile_x, min_tile_y, max_tile_y)
 
     def _draw_underground_darkness_overlay(self):
         """Wrapper to the lighting system implementation."""
-        self.lighting.draw_underground_darkness_overlay()
+        self._require_lighting().draw_underground_darkness_overlay()
 
     def _celestial_position(self, progress: float) -> tuple[float, float]:
         """Wrapper to the lighting system implementation."""
@@ -754,15 +768,15 @@ class GameView(arcade.View):
 
     def _draw_celestials(self):
         """Wrapper to the lighting system implementation."""
-        self.lighting.draw_celestials()
+        self._require_lighting().draw_celestials()
 
     def _draw_moon_no_ambient(self):
         """Wrapper to draw moon texture after the lit world pass without ambient tint."""
-        self.lighting.draw_moon_no_ambient()
+        self._require_lighting().draw_moon_no_ambient()
 
     def _draw_stars_no_ambient(self):
         """Wrapper to draw stars in a non-ambient pass."""
-        self.lighting.draw_stars_no_ambient()
+        self._require_lighting().draw_stars_no_ambient()
 
     def _spawn_dropped_item(self, entry_id: int, tile_x: int, tile_y: int):
         """Erzeugt ein physisches Item an der Blockposition."""
@@ -844,7 +858,7 @@ class GameView(arcade.View):
                 pickup_radius=self.item_pickup_radius,
             )
 
-            if getattr(drop, "expired", False):
+            if drop.expired:
                 self.dropped_item_sprite_list.remove(drop.sprite)
                 continue
 
@@ -1208,7 +1222,7 @@ class GameView(arcade.View):
         self.player.change_x = 0.0
         self.player.change_y = 0.0
         self.player.on_ground = True
-        self.player.health = max(1, getattr(self.player, "max_health", 10))
+        self.player.health = max(1, self.player.max_health)
         self.player_sprite_list = arcade.SpriteList()
         self.player_sprite_list.append(self.player)
         self.mining_sprite_list = arcade.SpriteList()
@@ -1252,7 +1266,7 @@ class GameView(arcade.View):
         self.camera.position = self._clamped_camera_position()
         self.world.update_loaded_chunks(self.player.center_x)
         self._rebuild_world_sprites()
-        self.light_layer.resize(int(self.width), int(self.height))
+        self._require_light_layer().resize(int(self.width), int(self.height))
         self._sync_torch_lights()
 
     @staticmethod
@@ -1427,7 +1441,7 @@ class GameView(arcade.View):
         self.camera.position = self._clamped_camera_position()
         self.world.update_loaded_chunks(self.player.center_x)
         self._rebuild_world_sprites()
-        self.light_layer.resize(int(self.width), int(self.height))
+        self._require_light_layer().resize(int(self.width), int(self.height))
         self._sync_torch_lights()
 
     def spawn_mob(self, mob_class, x: float, y: float, **mob_kwargs):
@@ -1548,7 +1562,7 @@ class GameView(arcade.View):
             mob.center_y + height / 2,
         )
         for other in self.mobs:
-            if not getattr(other, "alive", True):
+            if not other.alive:
                 continue
             other_aabb = (
                 other.center_x - other.collision_width / 2,
@@ -1559,21 +1573,16 @@ class GameView(arcade.View):
             if aabb_overlap(mob_aabb, other_aabb):
                 return False
 
-        player_cx = getattr(self.player, "center_x", None)
-        player_cy = getattr(self.player, "center_y", None)
-        player_cw = float(getattr(self.player, "collision_width", getattr(self.player, "width", 0.0)))
-        player_ch = float(getattr(self.player, "collision_height", getattr(self.player, "height", 0.0)))
-        if (
-            isinstance(player_cx, (int, float))
-            and isinstance(player_cy, (int, float))
-            and player_cw > 0.0
-            and player_ch > 0.0
-        ):
+        player_cx = float(self.player.center_x)
+        player_cy = float(self.player.center_y)
+        player_cw = float(self.player.collision_width)
+        player_ch = float(self.player.collision_height)
+        if player_cw > 0.0 and player_ch > 0.0:
             player_aabb = (
-                float(player_cx) - player_cw / 2,
-                float(player_cx) + player_cw / 2,
-                float(player_cy) - player_ch / 2,
-                float(player_cy) + player_ch / 2,
+                player_cx - player_cw / 2,
+                player_cx + player_cw / 2,
+                player_cy - player_ch / 2,
+                player_cy + player_ch / 2,
             )
             if aabb_overlap(mob_aabb, player_aabb):
                 return False
@@ -1690,7 +1699,7 @@ class GameView(arcade.View):
                 did_full_rebuild = True
 
         block_changes = self.world.consume_changed_blocks()
-        self.lighting.notify_world_block_changes(block_changes)
+        self._require_lighting().notify_world_block_changes(block_changes)
         if block_changes and not did_full_rebuild:
             self._apply_world_block_diffs(block_changes)
 
@@ -1920,8 +1929,9 @@ class GameView(arcade.View):
     def on_draw(self):
         """Zeichnet die Szene und die Minecraft-artige Hotbar."""
         self.clear((0, 0, 0, 255))
+        light_layer = self._require_light_layer()
 
-        with self.light_layer:
+        with light_layer:
             self.ui_camera.use()
             self._draw_sky_shader()
 
@@ -1948,7 +1958,7 @@ class GameView(arcade.View):
             self.lava_sprite_list.draw()
             self._draw_underground_darkness_overlay()
 
-        self.light_layer.draw(ambient_color=self._ambient_color())
+        light_layer.draw(ambient_color=self._ambient_color())
 
         self.ui_camera.use()
         self._draw_moon_no_ambient()
@@ -2026,8 +2036,9 @@ class GameView(arcade.View):
             return
 
         if cmd_down and symbol == arcade.key.U:
-            self.lighting.use_cpu_underground_overlay_debug = not self.lighting.use_cpu_underground_overlay_debug
-            mode = "CPU" if self.lighting.use_cpu_underground_overlay_debug else "GPU"
+            lighting = self._require_lighting()
+            lighting.use_cpu_underground_overlay_debug = not lighting.use_cpu_underground_overlay_debug
+            mode = "CPU" if lighting.use_cpu_underground_overlay_debug else "GPU"
             print(f"[lighting] underground overlay mode: {mode}")
             return
 
