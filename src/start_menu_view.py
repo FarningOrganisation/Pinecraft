@@ -62,11 +62,15 @@ class StartMenuView(arcade.View):
 
         self.fullscreen_button = arcade.gui.UIFlatButton(text="", width=360, height=36)
         create_world_button = arcade.gui.UIFlatButton(text="Create World", width=360, height=42)
+        host_lan_button = arcade.gui.UIFlatButton(text="Host LAN World", width=360, height=42)
+        join_lan_button = arcade.gui.UIFlatButton(text="Join LAN World", width=360, height=42)
         load_world_button = arcade.gui.UIFlatButton(text="Load World", width=360, height=42)
         quit_button = arcade.gui.UIFlatButton(text="Quit", width=360, height=36)
 
         self.fullscreen_button.on_click = self._on_toggle_fullscreen
         create_world_button.on_click = self._on_open_create_world
+        host_lan_button.on_click = self._on_open_host_lan
+        join_lan_button.on_click = self._on_open_join_lan
         load_world_button.on_click = self._on_open_load_world
         quit_button.on_click = self._on_quit
 
@@ -76,6 +80,8 @@ class StartMenuView(arcade.View):
         container.add(arcade.gui.UIWidget(width=1, height=8))
         container.add(create_world_button)
         container.add(load_world_button)
+        container.add(host_lan_button)
+        container.add(join_lan_button)
         container.add(self.fullscreen_button)
         container.add(quit_button)
 
@@ -102,6 +108,20 @@ class StartMenuView(arcade.View):
         from create_world_view import CreateWorldView
 
         self.window.show_view(CreateWorldView())
+
+    def _on_open_host_lan(self, event):
+        if self.window is None:
+            return
+        from load_world_view import LoadWorldView
+
+        self.window.show_view(LoadWorldView(host_lan=True))
+
+    def _on_open_join_lan(self, event):
+        if self.window is None:
+            return
+        from join_lan_view import JoinLanView
+
+        self.window.show_view(JoinLanView())
 
     def _on_open_load_world(self, event):
         if self.window is None:

@@ -15,8 +15,9 @@ from settings import BACKGROUND_COLOR
 class LoadWorldView(arcade.View):
     """Untermenue zum Laden vorhandener Spielstaende."""
 
-    def __init__(self):
+    def __init__(self, host_lan: bool = False):
         super().__init__()
+        self.host_lan = host_lan
         self.ui_manager = arcade.gui.UIManager()
         self.root = arcade.gui.UIAnchorLayout(size_hint=(1.0, 1.0))
         self.status_label: arcade.gui.UILabel | None = None
@@ -52,7 +53,7 @@ class LoadWorldView(arcade.View):
         container = arcade.gui.UIBoxLayout(vertical=True, space_between=10)
 
         title = arcade.gui.UILabel(
-            text="Load World",
+            text="Host LAN World" if self.host_lan else "Load World",
             width=panel_width,
             height=50,
             align="center",
@@ -140,18 +141,28 @@ class LoadWorldView(arcade.View):
         )
 
         action_row = arcade.gui.UIBoxLayout(vertical=False, size_hint=None, width=panel_width, height=40, space_between=12)
-        load_button = arcade.gui.UIFlatButton(text="Load", width=274, height=40)
+        load_button = arcade.gui.UIFlatButton(
+            text="Start LAN Server" if self.host_lan else "Load",
+            width=274,
+            height=40,
+        )
         delete_button = arcade.gui.UIFlatButton(text="Delete", width=274, height=40)
         load_button.on_click = self._on_load_selected
         delete_button.on_click = self._on_delete_selected
         action_row.add(load_button)
         action_row.add(delete_button)
+        create_hosted_button: arcade.gui.UIFlatButton | None = None
+        if self.host_lan:
+            create_hosted_button = arcade.gui.UIFlatButton(text="Create New Hosted World", width=panel_width, height=36)
+            create_hosted_button.on_click = self._on_create_hosted_world
         back_button = arcade.gui.UIFlatButton(text="Back", width=panel_width, height=34)
         back_button.on_click = self._on_back
 
         container.add(arcade.gui.UIWidget(width=1, height=10))
         container.add(self.status_label)
         container.add(action_row)
+        if create_hosted_button is not None:
+            container.add(create_hosted_button)
         container.add(back_button)
 
         self.root.add(container, anchor_x="center", anchor_y="center")
@@ -245,7 +256,16 @@ class LoadWorldView(arcade.View):
             meta_data = save_data.get("meta", {})
             seed = int(world_data.get("seed"))
             world_name = str(meta_data.get("world_name") or "World")
-            self.window.show_view(GameView(seed=seed, world_name=world_name, save_data=save_data))
+            if self.host_lan:
+                from network.server import LanServer
+
+                server = LanServer(seed=seed, world_name=world_name, initial_save_data=save_data)
+                server.start()
+                self.window.show_view(
+                    GameView(seed=seed, world_name=world_name, save_data=save_data, lan_server=server)
+                )
+            else:
+                self.window.show_view(GameView(seed=seed, world_name=world_name, save_data=save_data))
         except Exception as exc:
             if self.status_label is not None:
                 self._status_text = f"Load failed: {exc}"
@@ -277,6 +297,13 @@ class LoadWorldView(arcade.View):
                 self.status_label.trigger_full_render()
             return
         self._on_delete(self._selected_file_name)
+
+    def _on_create_hosted_world(self, event):
+        if self.window is None:
+            return
+        from create_world_view import CreateWorldView
+
+        self.window.show_view(CreateWorldView(host_lan=True))
 
     def _on_back(self, event):
         if self.window is None:

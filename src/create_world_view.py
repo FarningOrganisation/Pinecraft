@@ -9,8 +9,9 @@ from settings import BACKGROUND_COLOR, WORLD_SEED
 class CreateWorldView(arcade.View):
     """Untermenue zum Erstellen einer neuen Welt."""
 
-    def __init__(self):
+    def __init__(self, host_lan: bool = False):
         super().__init__()
+        self.host_lan = host_lan
         self.ui_manager = arcade.gui.UIManager()
         self.root = arcade.gui.UIAnchorLayout(size_hint=(1.0, 1.0))
         self.seed_input: arcade.gui.UIInputText | None = None
@@ -37,7 +38,7 @@ class CreateWorldView(arcade.View):
         container = arcade.gui.UIBoxLayout(vertical=True, space_between=12)
 
         title = arcade.gui.UILabel(
-            text="Create World",
+            text="Host LAN World" if self.host_lan else "Create World",
             width=380,
             height=52,
             align="center",
@@ -69,7 +70,20 @@ class CreateWorldView(arcade.View):
         )
         self.name_input = arcade.gui.UIInputText(width=380, height=40, text="MyWorld")
 
-        start_button = arcade.gui.UIFlatButton(text="Start World", width=380, height=42)
+        self.port_input: arcade.gui.UIInputText | None = None
+        if self.host_lan:
+            port_label = arcade.gui.UILabel(
+                text="Port",
+                width=380,
+                height=20,
+                align="left",
+                font_size=14,
+                text_color=arcade.color.WHITE,
+                size_hint=None,
+            )
+            self.port_input = arcade.gui.UIInputText(width=380, height=40, text="25565")
+
+        start_button = arcade.gui.UIFlatButton(text="Start LAN Server" if self.host_lan else "Start World", width=380, height=42)
         back_button = arcade.gui.UIFlatButton(text="Back", width=380, height=36)
 
         start_button.on_click = self._on_start_world
@@ -81,6 +95,9 @@ class CreateWorldView(arcade.View):
         container.add(self.seed_input)
         container.add(world_name_label)
         container.add(self.name_input)
+        if self.port_input is not None:
+            container.add(port_label)
+            container.add(self.port_input)
         container.add(arcade.gui.UIWidget(width=1, height=8))
         container.add(start_button)
         container.add(back_button)
@@ -112,7 +129,19 @@ class CreateWorldView(arcade.View):
 
         seed = self._parse_seed()
         world_name = self._read_world_name()
-        self.window.show_view(GameView(seed=seed, world_name=world_name))
+        if not self.host_lan:
+            self.window.show_view(GameView(seed=seed, world_name=world_name))
+            return
+
+        try:
+            port = int(self.port_input.text) if self.port_input is not None else 25565
+            from network.server import LanServer
+
+            server = LanServer(seed=seed, world_name=world_name, port=port)
+            server.start()
+            self.window.show_view(GameView(seed=seed, world_name=world_name, lan_server=server))
+        except (OSError, ValueError):
+            return
 
     def _on_back(self, event):
         if self.window is None:

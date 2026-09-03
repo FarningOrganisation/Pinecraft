@@ -5,7 +5,6 @@ import arcade.gui
 
 from save_system import save_game
 from settings import START_FULLSCREEN
-from start_menu_view import StartMenuView
 
 
 class GameMenuView(arcade.View):
@@ -90,7 +89,7 @@ class GameMenuView(arcade.View):
     def _on_back_to_start(self, event):
         if self.window is None:
             return
-        self.window.show_view(StartMenuView())
+        self.game_view._return_to_start_menu()
 
     def _on_save_and_exit(self, event):
         if self.window is None or self.game_view is None:
@@ -100,7 +99,11 @@ class GameMenuView(arcade.View):
             print(f"[save] wrote {save_path}")
         except Exception as exc:
             print(f"[save] failed: {exc}")
-        self.window.show_view(StartMenuView())
+        self.game_view._return_to_start_menu()
+
+    def on_update(self, delta_time: float):
+        """Reagiert auch im pausierten Menü auf einen verlorenen LAN-Host."""
+        self.game_view._disconnect_if_lan_ended()
 
     def on_draw(self):
         if self.game_view is not None:

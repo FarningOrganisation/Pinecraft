@@ -65,9 +65,14 @@ from world_generation import (
     get_water_render_height,
 )
 from save_system import load_save, save_game
+from network.client import LanClient
+from network.server import LanServer
 
 # Choose the mob type spawned via the debug key from here instead of scrolling down.
 DEBUG_SPAWN_MOB_CLASS = SlimeBoss
+NETWORK_SNAPSHOT_INTERVAL = 1.0 / 20.0
+REMOTE_PLAYER_INTERPOLATION_RATE = 14.0
+MAX_PENDING_NETWORK_INPUTS = 120
 
 
 class GameView(arcade.View):
@@ -79,6 +84,8 @@ class GameView(arcade.View):
         world_name: str = "World",
         save_data: dict | None = None,
         restore_runtime_state: bool = False,
+        lan_server: LanServer | None = None,
+        lan_client: LanClient | None = None,
     ):
         super().__init__()
         arcade.set_background_color(BACKGROUND_COLOR)
@@ -86,6 +93,16 @@ class GameView(arcade.View):
         self.start_world_seed = WORLD_SEED if seed is None else seed
         self._pending_save_data = save_data
         self._restore_runtime_state = bool(restore_runtime_state)
+        self.lan_server = lan_server
+        self.lan_client = lan_client
+        self.local_player_id = "host" if lan_server is not None else (lan_client.player_id if lan_client is not None else None)
+        self.remote_players: dict[str, Player] = {}
+        self.remote_player_inputs: dict[str, dict[str, bool | int]] = {}
+        self.remote_player_sprite_list = arcade.SpriteList()
+        self._network_snapshot_timer = 0.0
+        self._pending_network_inputs: list[tuple[int, bool, bool, bool, float]] = []
+        self._remote_player_targets: dict[str, tuple[float, float]] = {}
+        self._has_network_snapshot = False
         self.start_fullscreen = START_FULLSCREEN
         self.show_start_menu = False
         self.start_menu_seed_text = str(self.start_world_seed)
@@ -274,6 +291,35 @@ class GameView(arcade.View):
         """Deaktiviert UI-Systeme, wenn die View ausgeblendet wird."""
         self.ui_manager.disable()
 
+    def end_lan_session(self) -> None:
+        """Schließt eine lokale Host- oder Join-Sitzung kontrolliert."""
+        lan_client = self.lan_client
+        lan_server = self.lan_server
+        self.lan_client = None
+        self.lan_server = None
+        if lan_client is not None:
+            lan_client.close()
+        if lan_server is not None:
+            lan_server.stop()
+
+    def _return_to_start_menu(self) -> None:
+        """Beendet die LAN-Sitzung und wechselt zum Startmenü."""
+        self.end_lan_session()
+        if self.window is not None:
+            from start_menu_view import StartMenuView
+
+            self.window.show_view(StartMenuView())
+
+    def _disconnect_if_lan_ended(self) -> bool:
+        """Trennt die View, wenn ihr Host oder ihre Serververbindung endet."""
+        if self.lan_client is not None and not self.lan_client.is_connected:
+            self._return_to_start_menu()
+            return True
+        if self.lan_server is not None and not self.lan_server.is_running:
+            self._return_to_start_menu()
+            return True
+        return False
+
     @property
     def ctx(self):
         """Kompatibilitaet: LightingSystem nutzt self.ctx wie zuvor beim Window."""
@@ -318,6 +364,241 @@ class GameView(arcade.View):
         """Gibt die nach der View-Initialisierung verfügbare Licht-Ebene zurück."""
         assert self.light_layer is not None
         return self.light_layer
+
+    def _process_network_messages(self) -> None:
+        """Übernimmt Nachrichten im Arcade-Thread; Socket-Threads ändern keine Spielobjekte."""
+        if self.lan_server is not None:
+            for message in self.lan_server.drain_messages():
+                message_type = message.get("type")
+                player_id = str(message.get("player_id", ""))
+                if message_type == "player_joined" and player_id and player_id not in self.remote_players:
+                    remote_player = Player(self.world)
+                    remote_player.center_x, remote_player.center_y = self._remote_player_spawn_point()
+                    self.remote_players[player_id] = remote_player
+                    self.remote_player_inputs[player_id] = {"left": False, "right": False, "jump": False, "sequence": 0}
+                    self.remote_player_sprite_list.append(remote_player)
+                elif message_type == "player_left" and player_id:
+                    remote_player = self.remote_players.pop(player_id, None)
+                    self.remote_player_inputs.pop(player_id, None)
+                    self._remote_player_targets.pop(player_id, None)
+                    if remote_player is not None:
+                        self.remote_player_sprite_list.remove(remote_player)
+                elif message_type == "input" and player_id in self.remote_player_inputs:
+                    input_state = self.remote_player_inputs[player_id]
+                    sequence = message.get("sequence")
+                    if isinstance(sequence, int) and not isinstance(sequence, bool):
+                        input_state["sequence"] = max(int(input_state["sequence"]), sequence)
+                    input_state.update({
+                        "left": bool(message.get("left", False)),
+                        "right": bool(message.get("right", False)),
+                        "jump": bool(message.get("jump", False)),
+                    })
+
+        if self.lan_client is not None:
+            for message in self.lan_client.drain_messages():
+                if message.get("type") == "snapshot":
+                    self._apply_network_snapshot(message)
+
+    def _apply_network_snapshot(self, snapshot: dict) -> None:
+        """Aktualisiert Spieler und vom Host bestätigte Weltänderungen aus einem Snapshot."""
+        players = snapshot.get("players", [])
+        acknowledged_input_sequence: int | None = None
+        if isinstance(players, list):
+            visible_player_ids: set[str] = set()
+            for player_data in players:
+                if not isinstance(player_data, dict):
+                    continue
+                player_id = str(player_data.get("id", ""))
+                if not player_id:
+                    continue
+                visible_player_ids.add(player_id)
+                if player_id == self.local_player_id:
+                    target = self.player
+                    self._has_network_snapshot = True
+                    sequence = player_data.get("input_sequence")
+                    if isinstance(sequence, int) and not isinstance(sequence, bool):
+                        acknowledged_input_sequence = sequence
+                else:
+                    target = self.remote_players.get(player_id)
+                    if target is None:
+                        target = Player(self.world)
+                        self.remote_players[player_id] = target
+                        self.remote_player_sprite_list.append(target)
+                        target.center_x = float(player_data.get("x", target.center_x))
+                        target.center_y = float(player_data.get("y", target.center_y))
+                    else:
+                        self._remote_player_targets[player_id] = (
+                            float(player_data.get("x", target.center_x)),
+                            float(player_data.get("y", target.center_y)),
+                        )
+                if player_id == self.local_player_id:
+                    target.center_x = float(player_data.get("x", target.center_x))
+                    target.center_y = float(player_data.get("y", target.center_y))
+                target.change_x = float(player_data.get("vx", target.change_x))
+                target.change_y = float(player_data.get("vy", target.change_y))
+                target.facing_right = bool(player_data.get("facing_right", target.facing_right))
+                target.on_ground = bool(player_data.get("on_ground", target.on_ground))
+                animation_state = player_data.get("animation_state")
+                if isinstance(animation_state, str):
+                    target.set_animation_state(animation_state)
+
+            for player_id, remote_player in list(self.remote_players.items()):
+                if player_id not in visible_player_ids:
+                    self.remote_player_sprite_list.remove(remote_player)
+                    del self.remote_players[player_id]
+                    self._remote_player_targets.pop(player_id, None)
+
+        for change in snapshot.get("block_changes", []):
+            if isinstance(change, list) and len(change) == 3:
+                self.world.set_block(int(change[0]), int(change[1]), int(change[2]))
+
+        if acknowledged_input_sequence is not None:
+            self._pending_network_inputs = [
+                pending_input
+                for pending_input in self._pending_network_inputs
+                if pending_input[0] > acknowledged_input_sequence
+            ]
+            self._replay_pending_network_inputs()
+
+    def _update_remote_players(self, delta_time: float) -> None:
+        """Simuliert nur auf dem Host die von Clients angeforderten Bewegungen."""
+        if self.lan_server is None:
+            return
+        for player_id, remote_player in self.remote_players.items():
+            inputs = self.remote_player_inputs[player_id]
+            remote_player.refresh_water_state()
+            if bool(inputs["left"]) and not bool(inputs["right"]):
+                remote_player.move_left()
+            elif bool(inputs["right"]) and not bool(inputs["left"]):
+                remote_player.move_right()
+            elif remote_player.on_ground:
+                remote_player.stop_horizontal()
+            jump_pressed = bool(inputs["jump"])
+            remote_player.apply_swim_input(jump_pressed, delta_time)
+            if jump_pressed and remote_player.on_ground and not remote_player.in_water and not remote_player.feet_in_water:
+                remote_player.jump()
+            self.physics.update(remote_player, delta_time)
+            remote_player.refresh_water_state()
+            remote_player.update(delta_time)
+
+    def _send_network_snapshot(self, delta_time: float, block_changes: list[tuple[int, int, int, int]]) -> None:
+        """Sendet zwanzigmal pro Sekunde den vom Host bestätigten Spielerzustand."""
+        if self.lan_server is None:
+            return
+        self._network_snapshot_timer += delta_time
+        if self._network_snapshot_timer < NETWORK_SNAPSHOT_INTERVAL:
+            return
+        self._network_snapshot_timer = 0.0
+        players = [
+            {
+                "id": "host",
+                "x": self.player.center_x,
+                "y": self.player.center_y,
+                "vx": self.player.change_x,
+                "vy": self.player.change_y,
+                "facing_right": self.player.facing_right,
+                "on_ground": self.player.on_ground,
+                "animation_state": self.player.current_animation_state,
+                "input_sequence": 0,
+            }
+        ]
+        for player_id, remote in self.remote_players.items():
+            inputs = self.remote_player_inputs[player_id]
+            players.append(
+                {
+                "id": player_id,
+                "x": remote.center_x,
+                "y": remote.center_y,
+                "vx": remote.change_x,
+                "vy": remote.change_y,
+                "facing_right": remote.facing_right,
+                "on_ground": remote.on_ground,
+                "animation_state": remote.current_animation_state,
+                "input_sequence": int(inputs["sequence"]),
+            }
+            )
+        self.lan_server.broadcast_snapshot(
+            {"type": "snapshot", "players": players, "block_changes": [[x, y, block_id] for x, y, _old_block, block_id in block_changes]}
+        )
+
+    def _send_network_input(self, delta_time: float = 0.0) -> None:
+        """Überträgt einen lokalen Bewegungszustand für Client-Prediction."""
+        if self.lan_client is None:
+            return
+        inputs = (self.left_pressed, self.right_pressed, self.jump_pressed)
+        sequence = self.lan_client.send_input(*inputs)
+        if sequence is None:
+            return
+        self._pending_network_inputs.append((sequence, *inputs, min(max(0.0, delta_time), 1 / 30)))
+        if len(self._pending_network_inputs) > MAX_PENDING_NETWORK_INPUTS:
+            self._pending_network_inputs = self._pending_network_inputs[-MAX_PENDING_NETWORK_INPUTS:]
+
+    def _has_loaded_prediction_chunks(self) -> bool:
+        """Verhindert lokale Vorhersage an noch nicht geladenen Chunk-Grenzen."""
+        left_tile = int(math.floor((self.player.center_x - self.player.collision_width / 2 - TILE_SIZE) / TILE_SIZE))
+        right_tile = int(math.floor((self.player.center_x + self.player.collision_width / 2 + TILE_SIZE) / TILE_SIZE))
+        left_chunk, _ = world_to_chunk_and_local(left_tile)
+        right_chunk, _ = world_to_chunk_and_local(right_tile)
+        return all(chunk_x in self.world.chunks for chunk_x in range(left_chunk, right_chunk + 1))
+
+    def _simulate_predicted_input(self, left: bool, right: bool, jump: bool, delta_time: float) -> None:
+        """Simuliert einen noch nicht bestätigten lokalen Bewegungszustand."""
+        if delta_time <= 0.0 or not self._has_loaded_prediction_chunks():
+            return
+        self.player.refresh_water_state()
+        if left and not right:
+            self.player.move_left()
+        elif right and not left:
+            self.player.move_right()
+        elif self.player.on_ground:
+            self.player.stop_horizontal()
+        self.player.apply_swim_input(jump, delta_time)
+        if jump and self.player.on_ground and not self.player.in_water and not self.player.feet_in_water:
+            self.player.jump()
+        self.physics.update(self.player, delta_time)
+        self.player.refresh_water_state()
+        self.player.update(0.0)
+
+    def _replay_pending_network_inputs(self) -> None:
+        """Spielt nach einer Serverkorrektur nur unbestätigte Inputs erneut ab."""
+        for _sequence, left, right, jump, delta_time in self._pending_network_inputs:
+            self._simulate_predicted_input(left, right, jump, delta_time)
+
+    def _interpolate_remote_players(self, delta_time: float) -> None:
+        """Glättet fremde Spieler zwischen zwei autoritativen Snapshots."""
+        blend = min(1.0, max(0.0, delta_time) * REMOTE_PLAYER_INTERPOLATION_RATE)
+        for player_id, target_position in self._remote_player_targets.items():
+            player = self.remote_players.get(player_id)
+            if player is None:
+                continue
+            player.center_x += (target_position[0] - player.center_x) * blend
+            player.center_y += (target_position[1] - player.center_y) * blend
+
+    def _update_network_player_animations(self, delta_time: float) -> None:
+        """Lässt auf Clients nur visuelle Animationen zwischen Snapshots weiterlaufen."""
+        for player in (self.player, *self.remote_players.values()):
+            player.scale_x = abs(player.scale_x) if player.facing_right else -abs(player.scale_x)
+            player.update_animation(delta_time)
+
+    def _update_joined_client(self, delta_time: float) -> None:
+        """Aktualisiert einen Join-Client ohne lokale Welt- oder Spielerphysik."""
+        physics_delta = min(max(0.0, delta_time), 1 / 30)
+        self._send_network_input(physics_delta)
+        if not self._has_network_snapshot:
+            return
+
+        self._simulate_predicted_input(self.left_pressed, self.right_pressed, self.jump_pressed, physics_delta)
+        self._interpolate_remote_players(delta_time)
+        self._update_network_player_animations(delta_time)
+        self.camera.position = self._clamped_camera_position()
+        loaded_chunks, unloaded_chunks = self.world.update_loaded_chunks(
+            self.player.center_x,
+            max_loads=self.max_chunk_loads_per_frame,
+            max_unloads=self.max_chunk_unloads_per_frame,
+        )
+        if loaded_chunks or unloaded_chunks:
+            self._sync_chunk_sprite_cache(loaded_chunks, unloaded_chunks)
+        self._sync_torch_lights()
 
     def _is_torch_equipped(self) -> bool:
         """True, wenn der aktuell ausgewählte Hotbar-Slot eine Fackel enthält."""
@@ -452,11 +733,46 @@ class GameView(arcade.View):
         return left <= x <= right and bottom <= y <= top
 
     def _default_spawn_point(self) -> tuple[float, float]:
-        """Berechnet den initialen Spawnpunkt dieser Welt."""
-        spawn_x = SCREEN_WIDTH / 2
-        ground_y = self.world.get_ground_top(int(spawn_x))
-        spawn_y = ground_y + self.player.height / 2
-        return float(spawn_x), float(spawn_y)
+        """Findet den initialen trockenen Spawnpunkt dieser Welt."""
+        return self._find_dry_spawn_point(SCREEN_WIDTH / 2)
+
+    def _remote_player_spawn_point(self) -> tuple[float, float]:
+        """Findet für einen beitretenden Spieler festen Boden außerhalb von Wasser."""
+        return self._default_spawn_point()
+
+    def _find_dry_spawn_point(self, preferred_x: float) -> tuple[float, float]:
+        """Sucht nahe einer Wunschposition eine trockene, sichere Bodenfläche."""
+        fallback_x = float(preferred_x)
+        fallback_ground_y = self.world.get_ground_top(int(fallback_x))
+        fallback_y = fallback_ground_y + self.player.height / 2
+        half_width = self.player.collision_width / 2
+        half_height = self.player.collision_height / 2
+
+        for distance in range(129):
+            offsets = (0,) if distance == 0 else (-distance, distance)
+            for offset in offsets:
+                spawn_x = fallback_x + offset * TILE_SIZE
+                ground_y = self.world.get_ground_top(int(spawn_x))
+                spawn_y = ground_y + self.player.height / 2
+                left_tile = int(math.floor((spawn_x - half_width + 1e-6) / TILE_SIZE))
+                right_tile = int(math.floor((spawn_x + half_width - 1e-6) / TILE_SIZE))
+                bottom_tile = int(math.floor((spawn_y - half_height) / TILE_SIZE))
+                top_tile = int(math.floor((spawn_y + half_height - 1e-6) / TILE_SIZE))
+
+                has_solid_support = all(
+                    is_block_solid(self.world.get_block(tile_x, bottom_tile - 1, generate_if_missing=False))
+                    for tile_x in range(left_tile, right_tile + 1)
+                )
+                body_is_clear_and_dry = all(
+                    self.world.get_block(tile_x, tile_y, generate_if_missing=False) == AIR
+                    and self.world.get_water(tile_x, tile_y) < Player.WATER_CONTACT_THRESHOLD
+                    for tile_x in range(left_tile, right_tile + 1)
+                    for tile_y in range(bottom_tile, top_tile + 1)
+                )
+                if has_solid_support and body_is_clear_and_dry:
+                    return float(spawn_x), float(spawn_y)
+
+        return fallback_x, float(fallback_y)
 
     def _respawn_player(self):
         """Setzt den Spieler auf den Welt-Spawnpunkt zurück."""
@@ -1231,6 +1547,11 @@ class GameView(arcade.View):
         self.dropped_items = []
         self.mob_sprite_list = arcade.SpriteList()
         self.mobs = []
+        self.remote_players = {}
+        self.remote_player_inputs = {}
+        self.remote_player_sprite_list = arcade.SpriteList()
+        self._pending_network_inputs = []
+        self._remote_player_targets = {}
         self.mob_spawn_timer = 0.0
         self.hotbar = Hotbar(self.player)
         self.health_ui = HealthUI(self.player, self.hotbar)
@@ -1591,6 +1912,12 @@ class GameView(arcade.View):
 
     def on_update(self, delta_time: float):
         """Wird regelmäßig pro Frame aufgerufen."""
+        self._process_network_messages()
+        if self._disconnect_if_lan_ended():
+            return
+        if self.lan_client is not None:
+            self._update_joined_client(delta_time)
+            return
         if self.game_over:
             physics_delta = min(delta_time, 1 / 30)
             self.world.update(
@@ -1635,6 +1962,7 @@ class GameView(arcade.View):
             self.player.stop_horizontal()
 
         self.player.apply_swim_input(self.jump_pressed, physics_delta)
+        self._send_network_input()
 
         was_on_ground = self.player.on_ground
         self.physics.update(self.player, physics_delta)
@@ -1653,6 +1981,7 @@ class GameView(arcade.View):
             player=self.player,
             update_chunks=False,
         )
+        self._update_remote_players(physics_delta)
 
         for drop_id, tile_x, tile_y in self.player.consume_pending_item_drops():
             self._spawn_dropped_item(drop_id, tile_x, tile_y)
@@ -1710,6 +2039,8 @@ class GameView(arcade.View):
         lava_changes = self.world.consume_changed_lava()
         if lava_changes and not did_full_rebuild:
             self._apply_world_lava_diffs(lava_changes)
+
+        self._send_network_snapshot(delta_time, block_changes)
 
         if self.player.world_dirty:
             self.player.world_dirty = False
@@ -1953,6 +2284,7 @@ class GameView(arcade.View):
             self.player.draw_held_item(layer="back")
             self.player_sprite_list.draw()
             self.player.draw_held_item(layer="front")
+            self.remote_player_sprite_list.draw()
             self.mining_sprite_list.draw()
             self.water_sprite_list.draw()
             self.lava_sprite_list.draw()
@@ -1973,6 +2305,16 @@ class GameView(arcade.View):
         self.ui_manager.draw()
         self.fps_text.y = self.height - 16
         self.fps_text.draw()
+        if self.lan_server is not None:
+            arcade.draw_text(
+                f"LAN Host: {self.lan_server.local_ipv4}:{self.lan_server.port}",
+                self.width - 20,
+                self.height - 16,
+                arcade.color.WHITE,
+                font_size=14,
+                anchor_x="right",
+                anchor_y="top",
+            )
 
         if self.game_over:
             self._draw_game_over_overlay()
@@ -2003,15 +2345,16 @@ class GameView(arcade.View):
         self._rebuild_world_sprites()
         return target_x, target_y
 
-    def on_key_press(self, symbol: int, modifiers: int):
+    def on_key_press(self, symbol: int | None, modifiers: int):
         """Reagiert auf Tastatureingaben."""
+        if symbol is None:
+            return
+
         if self.game_over:
             if symbol == arcade.key.ENTER:
                 self._respawn_player()
             elif symbol == arcade.key.ESCAPE and self.window is not None:
-                from start_menu_view import StartMenuView
-
-                self.window.show_view(StartMenuView())
+                self._return_to_start_menu()
             return
 
         if symbol == arcade.key.ESCAPE and self.window is not None:
@@ -2106,10 +2449,7 @@ class GameView(arcade.View):
                     self._respawn_player()
                     return
                 if self._point_in_bounds(x, y, self._game_over_menu_bounds):
-                    from start_menu_view import StartMenuView
-
-                    if self.window is not None:
-                        self.window.show_view(StartMenuView())
+                    self._return_to_start_menu()
                     return
             return
 
@@ -2117,6 +2457,9 @@ class GameView(arcade.View):
         self.mouse_screen_y = y
 
         if self.inventory_ui.visible:
+            return
+
+        if self.lan_client is not None:
             return
 
         if button == arcade.MOUSE_BUTTON_LEFT:
