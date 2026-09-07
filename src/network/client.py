@@ -5,9 +5,57 @@ from __future__ import annotations
 import queue
 import socket
 import threading
+import json
 from typing import Any
+import uuid
+
+from paths import PROJECT_ROOT
 
 from network.protocol import receive_datagram, receive_message, send_datagram, send_message
+
+
+CLIENT_PROFILE_PATH = PROJECT_ROOT / "saves" / "lan_client_profiles.json"
+
+
+def _load_client_profile() -> dict[str, Any]:
+    try:
+        with CLIENT_PROFILE_PATH.open("r", encoding="utf-8") as handle:
+            profile = json.load(handle)
+    except (OSError, ValueError, json.JSONDecodeError):
+        profile = {}
+    return profile if isinstance(profile, dict) else {}
+
+
+def _save_client_profile(profile: dict[str, Any]) -> None:
+    try:
+        CLIENT_PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with CLIENT_PROFILE_PATH.open("w", encoding="utf-8") as handle:
+            json.dump(profile, handle, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
+def _get_client_id() -> str:
+    profile = _load_client_profile()
+    client_id = profile.get("client_id")
+    if isinstance(client_id, str) and client_id.strip():
+        return client_id.strip()
+    client_id = uuid.uuid4().hex
+    profile["client_id"] = client_id
+    _save_client_profile(profile)
+    return client_id
+
+
+def _save_world_player_name(world_id: str, player_name: str) -> None:
+    if not world_id or not player_name:
+        return
+    profile = _load_client_profile()
+    worlds = profile.setdefault("worlds", {})
+    if not isinstance(worlds, dict):
+        worlds = {}
+        profile["worlds"] = worlds
+    worlds[world_id] = {"player_name": player_name}
+    _save_client_profile(profile)
 
 
 class LanClient:
@@ -18,6 +66,11 @@ class LanClient:
         self.player_id = str(welcome["player_id"])
         self.seed = int(welcome["seed"])
         self.world_name = str(welcome["world_name"])
+        self.world_id = str(welcome.get("world_id", ""))
+        self.player_name = str(welcome.get("player_name", "Player"))
+        player_state = welcome.get("player_state")
+        self.player_state = player_state if isinstance(player_state, dict) else {}
+        _save_world_player_name(self.world_id, self.player_name)
         save_data = welcome.get("save_data")
         self.initial_save_data = save_data if isinstance(save_data, dict) else None
         self.incoming: queue.Queue[dict[str, Any]] = queue.Queue()
@@ -49,7 +102,7 @@ class LanClient:
         sock = socket.create_connection((host, int(port)), timeout=timeout)
         sock.settimeout(timeout)
         try:
-            send_message(sock, {"type": "hello", "name": name})
+            send_message(sock, {"type": "hello", "name": name, "client_id": _get_client_id()})
             welcome = receive_message(sock)
             if welcome is None or welcome.get("type") != "welcome":
                 raise ConnectionError("Server did not send a welcome message")

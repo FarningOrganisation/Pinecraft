@@ -374,6 +374,14 @@ class GameView(arcade.View):
                 if message_type == "player_joined" and player_id and player_id not in self.remote_players:
                     remote_player = Player(self.world)
                     remote_player.center_x, remote_player.center_y = self._remote_player_spawn_point()
+                    player_state = message.get("player_state")
+                    position = player_state.get("position") if isinstance(player_state, dict) else None
+                    if isinstance(position, dict):
+                        saved_x = position.get("x")
+                        saved_y = position.get("y")
+                        if isinstance(saved_x, (int, float)) and isinstance(saved_y, (int, float)):
+                            remote_player.center_x = float(saved_x)
+                            remote_player.center_y = float(saved_y)
                     self.remote_players[player_id] = remote_player
                     self.remote_player_inputs[player_id] = {"left": False, "right": False, "jump": False, "sequence": 0}
                     self.remote_player_sprite_list.append(remote_player)
@@ -769,7 +777,11 @@ class GameView(arcade.View):
                     for tile_x in range(left_tile, right_tile + 1)
                     for tile_y in range(bottom_tile, top_tile + 1)
                 )
-                if has_solid_support and body_is_clear_and_dry:
+                spawn_is_on_land = all(
+                    not self.world.generator._biome_for_world_x(tile_x).is_ocean
+                    for tile_x in range(left_tile, right_tile + 1)
+                )
+                if has_solid_support and body_is_clear_and_dry and spawn_is_on_land:
                     return float(spawn_x), float(spawn_y)
 
         return fallback_x, float(fallback_y)
@@ -1532,6 +1544,7 @@ class GameView(arcade.View):
         self.world = World(seed=self.start_world_seed if seed_override is None else seed_override)
         self.player = Player(world=self.world)
         spawn_x, spawn_y = self._default_spawn_point()
+        self.world.activate_loaded_liquids()
         self.world.set_spawn_point(spawn_x, spawn_y)
         self.player.center_x = spawn_x
         self.player.center_y = spawn_y

@@ -174,6 +174,12 @@ class World:
         """Generiert oder lädt den angegebenen Chunk."""
         return self.generator.generate_chunk(self, chunk_x)
 
+    def activate_loaded_liquids(self) -> None:
+        """Aktiviert Flüssigkeiten in allen bereits geladenen Chunks."""
+        for chunk_x in self.chunks:
+            self.water_system.activate_loaded_chunk_water(self, chunk_x)
+            self.lava_system.activate_loaded_chunk_lava(self, chunk_x)
+
     def get_saved_chunk_blocks(self, chunk_x: int) -> list[list[int]] | None:
         """Liefert gespeicherte Blockdaten für einen Chunk, falls vorhanden."""
         blocks = self.saved_chunk_blocks.get(chunk_x)

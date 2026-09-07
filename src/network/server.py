@@ -40,8 +40,10 @@ class LanServer:
     def __init__(self, seed: int, world_name: str, port: int = 25565, initial_save_data: dict[str, Any] | None = None):
         self.seed = int(seed)
         self.world_name = world_name
+        self.world_id = self._read_or_create_world_id(initial_save_data)
         self.port = int(port)
         self.initial_save_data = initial_save_data
+        self.player_states = self._read_saved_player_states(initial_save_data)
         self.incoming: queue.Queue[dict[str, Any]] = queue.Queue()
         self._clients: dict[str, _ConnectedClient] = {}
         self._clients_lock = threading.Lock()
@@ -50,6 +52,55 @@ class LanServer:
         self._udp_socket: socket.socket | None = None
         self._snapshot_sequence = 0
         self.local_ipv4 = "127.0.0.1"
+
+    @staticmethod
+    def _read_or_create_world_id(save_data: dict[str, Any] | None) -> str:
+        meta = save_data.get("meta", {}) if isinstance(save_data, dict) else {}
+        saved_world_id = meta.get("world_id") if isinstance(meta, dict) else None
+        if isinstance(saved_world_id, str) and saved_world_id.strip():
+            return saved_world_id.strip()
+        return uuid.uuid4().hex
+
+    @staticmethod
+    def _read_saved_player_states(save_data: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+        world = save_data.get("world", {}) if isinstance(save_data, dict) else {}
+        saved_states = world.get("connected_players", {}) if isinstance(world, dict) else {}
+        if not isinstance(saved_states, dict):
+            return {}
+        return {
+            str(client_id): dict(state)
+            for client_id, state in saved_states.items()
+            if isinstance(client_id, str) and client_id and isinstance(state, dict)
+        }
+
+    def _unique_player_name(self, requested_name: str, client_id: str) -> str:
+        existing_state = self.player_states.get(client_id)
+        if isinstance(existing_state, dict):
+            saved_name = existing_state.get("name")
+            if isinstance(saved_name, str) and saved_name.strip():
+                return saved_name.strip()
+
+        used_names = {
+            str(state.get("name", "")).casefold()
+            for state_id, state in self.player_states.items()
+            if state_id != client_id and isinstance(state, dict)
+        }
+        if requested_name.casefold() not in used_names:
+            return requested_name
+        number = 2
+        while f"{requested_name} {number}".casefold() in used_names:
+            number += 1
+        return f"{requested_name} {number}"
+
+    def update_player_state(self, player_id: str, x: float, y: float) -> None:
+        """Speichert die letzte autoritative Position eines verbundenen Spielers."""
+        with self._clients_lock:
+            client = self._clients.get(player_id)
+        if client is None:
+            return
+        state = self.player_states.setdefault(player_id, {"name": client.name})
+        state["name"] = client.name
+        state["position"] = {"x": float(x), "y": float(y)}
 
     @property
     def is_running(self) -> bool:
@@ -162,17 +213,24 @@ class LanServer:
             hello = receive_message(client_socket)
             if hello is None or hello.get("type") != "hello":
                 return
-            name = str(hello.get("name", "Player")).strip()[:24] or "Player"
-            player_id = uuid.uuid4().hex
+            requested_name = str(hello.get("name", "Player")).strip()[:24] or "Player"
+            supplied_id = hello.get("client_id")
+            player_id = supplied_id.strip() if isinstance(supplied_id, str) and supplied_id.strip() else uuid.uuid4().hex
+            name = self._unique_player_name(requested_name, player_id)
             udp_token = uuid.uuid4().hex
             client = _ConnectedClient(player_id, name, client_socket, threading.Lock(), udp_token)
             with self._clients_lock:
                 self._clients[player_id] = client
+            player_state = self.player_states.setdefault(player_id, {"name": name})
+            player_state["name"] = name
             welcome: dict[str, Any] = {
                 "type": "welcome",
                 "player_id": player_id,
                 "seed": self.seed,
                 "world_name": self.world_name,
+                "world_id": self.world_id,
+                "player_name": name,
+                "player_state": dict(player_state),
                 "udp_port": self.port,
                 "udp_token": udp_token,
             }
@@ -180,7 +238,7 @@ class LanServer:
                 welcome["save_data"] = self.initial_save_data
             with client.send_lock:
                 send_message(client_socket, welcome)
-            self.incoming.put({"type": "player_joined", "player_id": player_id, "name": name})
+            self.incoming.put({"type": "player_joined", "player_id": player_id, "name": name, "player_state": dict(player_state)})
             client_socket.settimeout(None)
             while self._running.is_set():
                 message = receive_message(client_socket)

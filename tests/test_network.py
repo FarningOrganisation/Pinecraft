@@ -347,6 +347,8 @@ class JoinedClientUpdateTests(unittest.TestCase):
                 view.world.get_water(int(spawn_x // TILE_SIZE), spawn_water_tile),
                 Player.WATER_CONTACT_THRESHOLD,
             )
+            spawn_tile_x = int(spawn_x // TILE_SIZE)
+            self.assertFalse(view.world.generator._biome_for_world_x(spawn_tile_x).is_ocean)
 
 
 class LanClientSnapshotTests(unittest.TestCase):

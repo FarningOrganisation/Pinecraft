@@ -395,6 +395,26 @@ class WaterTests(unittest.TestCase):
 
         self.assertEqual(chunk_a.water, chunk_b.water)
 
+    def test_loaded_natural_water_can_be_activated_after_world_initialization(self):
+        world = World(seed=WORLD_SEED)
+
+        for chunk_x in range(-3, 4):
+            chunk = world.generate_chunk(chunk_x)
+            if chunk.water:
+                break
+
+        self.assertTrue(chunk.water, "default world should contain natural water near spawn")
+        self.assertEqual(world.water_system.active_cells, set())
+
+        world.activate_loaded_liquids()
+
+        active_water_cells = {
+            (chunk_x * chunk.width + local_x, y)
+            for (local_x, y), amount in chunk.water.items()
+            if amount > 0.0
+        } & world.water_system.active_cells
+        self.assertTrue(active_water_cells, "loaded natural water should be scheduled for simulation")
+
     def test_generated_surface_water_respects_sea_level(self):
         world = World(seed=1337)
 
