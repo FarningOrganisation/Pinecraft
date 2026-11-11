@@ -1,8 +1,7 @@
 # Pinecraft
 
-Pinecraft ist ein kleines 2D-Sandbox-Spiel mit Python und Arcade für den Unterricht.
+Pinecraft ist ein minecraftartiges 2D-Sandbox-Spiel, welches mit Python und Python Arcade programmiert wurde.
 
-Ziel: schnell starten, sofort etwas sehen, dann eigene Ideen einbauen.
 
 ## Schnellstart
 
